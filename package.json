@@ -1,0 +1,22 @@
+{
+  "name": "quantix-v2",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Fresh-code post-quantum blockchain research prototype",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run -ws build",
+    "dev:node": "npm run -w @quantix/node dev",
+    "test": "tsx --test tests/**/*.test.ts",
+    "typecheck": "npm run -ws typecheck",
+    "lint": "npm run -ws lint"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.0"
+  }
+}
