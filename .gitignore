@@ -4,3 +4,5 @@ dist
 coverage
 .DS_Store
 .env
+testnets/devnet/data/
+test/*

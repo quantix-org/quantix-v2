@@ -1,4 +1,7 @@
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
+import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import {
   DEFAULT_PROTOCOL_CONFIG,
   applyBlock,
@@ -8,43 +11,77 @@ import {
   transactionSigningPayload,
   type Transaction,
 } from "@quantix/protocol";
-import {
-  deriveAddressFromPublicKey,
-  generatePqKeyPair,
-  signPqMessage,
-  verifyPqSignature,
-} from "@quantix/crypto";
+import { deriveAddressFromPublicKey, generatePqKeyPair, signPqMessage, verifyPqSignature } from "@quantix/crypto";
+import { loadDevnetConfig, type ValidatorConfig } from "./config.js";
 import { asRpcError, RpcError, RpcErrorCode } from "./rpc-errors.js";
+import { rpcCall } from "./rpc-client.js";
+import { loadPersistedNodeData, savePersistedNodeData } from "./storage.js";
 import { enqueueValidatedTx, getNextExpectedNonce, hashTx, parseRpcTransactionStrict } from "./tx-policy.js";
 
-const aliceKeys = generatePqKeyPair();
-const bobKeys = generatePqKeyPair();
-const carolKeys = generatePqKeyPair();
+interface Proposal {
+  height: number;
+  parentHash: string;
+  proposerId: string;
+  txs: Transaction[];
+  hash: string;
+}
 
-const alice = deriveAddressFromPublicKey(aliceKeys.publicKey);
-const bob = deriveAddressFromPublicKey(bobKeys.publicKey);
-const carol = deriveAddressFromPublicKey(carolKeys.publicKey);
+interface Vote {
+  proposalHash: string;
+  height: number;
+  voterId: string;
+  signature: string;
+}
 
-const state = createGenesisState({
-  [alice]: 1_000n,
-  [bob]: 600n,
-  [carol]: 600n,
-});
+const defaultConfigPath = resolve(
+  fileURLToPath(new URL("../../../testnets/devnet/config.json", import.meta.url)),
+);
+const configPath = process.env.QTX_CONFIG_PATH ? resolve(process.env.QTX_CONFIG_PATH) : defaultConfigPath;
+const devnetConfig = loadDevnetConfig(configPath);
+const nodeId = process.env.NODE_ID ?? devnetConfig.validators[0].id;
+const defaultDataDir = resolve(
+  fileURLToPath(new URL(`../../../testnets/devnet/data/${nodeId}`, import.meta.url)),
+);
+const dataDir = process.env.QTX_DATA_DIR ? resolve(process.env.QTX_DATA_DIR) : defaultDataDir;
+const selfConfig = devnetConfig.validators.find((validator) => validator.id === nodeId);
+if (!selfConfig) {
+  throw new Error(`NODE_ID '${nodeId}' not found in config`);
+}
+
+const keyByValidatorId = new Map<string, ReturnType<typeof generatePqKeyPair>>();
+const addressByValidatorId = new Map<string, string>();
+const validatorByAddress = new Map<string, ValidatorConfig>();
+
+for (const validator of devnetConfig.validators) {
+  const keys = generatePqKeyPair(validator.seedHex);
+  keyByValidatorId.set(validator.id, keys);
+  const address = deriveAddressFromPublicKey(keys.publicKey);
+  addressByValidatorId.set(validator.id, address);
+  validatorByAddress.set(address, validator);
+}
+
+const selfKeys = keyByValidatorId.get(nodeId) ?? fail(`missing key material for ${nodeId}`);
+const selfAddress = addressByValidatorId.get(nodeId) ?? fail(`missing address for ${nodeId}`);
+const peerConfigs = devnetConfig.validators.filter((validator) => validator.id !== nodeId);
+
+const state = createGenesisState(
+  Object.fromEntries(
+    devnetConfig.validators.map((validator) => {
+      const address = addressByValidatorId.get(validator.id);
+      if (!address) {
+        throw new Error(`missing address for ${validator.id}`);
+      }
+
+      return [address, BigInt(validator.initialBalance)];
+    }),
+  ),
+);
 
 const mempool: Transaction[] = [];
-const blocks: Array<{
-  height: number;
-  hash: string;
-  txCount: number;
-  committed: boolean;
-}> = [];
+const blocks: Array<{ height: number; hash: string; txCount: number; committed: boolean }> = [];
 const offlineValidators = new Set<string>();
-
-const keyByAddress = new Map([
-  [alice, aliceKeys],
-  [bob, bobKeys],
-  [carol, carolKeys],
-]);
+const pendingProposals = new Map<string, Proposal>();
+let bootstrapApplied = false;
 
 const verifier = (tx: Transaction, payload: string): true | string => {
   if (deriveAddressFromPublicKey(tx.signerPublicKey) !== tx.from) {
@@ -58,49 +95,30 @@ const verifier = (tx: Transaction, payload: string): true | string => {
   return true;
 };
 
-const bootstrapBlock: Transaction[] = [
-  signTx({ type: "stake", from: alice, nonce: 1, amount: 100n }),
-  signTx({ type: "validator_register", from: alice, nonce: 2, amount: 1n, validatorId: "validator-alice" }),
-  signTx({ type: "stake", from: bob, nonce: 1, amount: 100n }),
-  signTx({ type: "validator_register", from: bob, nonce: 2, amount: 1n, validatorId: "validator-bob" }),
-  signTx({ type: "stake", from: carol, nonce: 1, amount: 100n }),
-  signTx({ type: "validator_register", from: carol, nonce: 2, amount: 1n, validatorId: "validator-carol" }),
-];
+const blockIntervalMs = Number(process.env.QTX_BLOCK_INTERVAL_MS ?? String(devnetConfig.blockIntervalMs));
+const rpcPort = Number(process.env.QTX_RPC_PORT ?? String(selfConfig.rpcPort));
 
-const bootstrapResult = applyBlock(state, bootstrapBlock, DEFAULT_PROTOCOL_CONFIG, { verifySignature: verifier });
-
-enqueueSignedTx(
-  signTx({
-    type: "transfer",
-    from: alice,
-    to: bob,
-    nonce: 3,
-    amount: 25n,
-  }),
-);
-
-const blockIntervalMs = Number(process.env.QTX_BLOCK_INTERVAL_MS ?? "4000");
-const rpcPort = Number(process.env.QTX_RPC_PORT ?? "7331");
+loadStateFromDisk();
+applyBootstrapOnce();
+seedInitialMempool();
 
 setInterval(() => {
-  produceBlock();
+  void produceDistributedBlock();
 }, blockIntervalMs);
+
+setInterval(() => {
+  void syncFromPeers();
+}, blockIntervalMs * 2);
 
 const server = createServer(async (req, res) => {
   if (req.method !== "POST" || req.url !== "/rpc") {
-    sendJson(res, 404, {
-      error: "not found",
-    });
+    sendJson(res, 404, { error: "not found" });
     return;
   }
 
   try {
     const body = await readBody(req);
-    const rpc = JSON.parse(body) as {
-      id?: string | number;
-      method?: string;
-      params?: unknown[];
-    };
+    const rpc = JSON.parse(body) as { id?: string | number; method?: string; params?: unknown[] };
 
     if (!rpc || typeof rpc !== "object") {
       throw new RpcError(RpcErrorCode.INVALID_REQUEST, "invalid JSON-RPC request");
@@ -135,13 +153,79 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(rpcPort, () => {
-  console.log("Bootstrap block applied");
-  console.log(`Accepted txs: ${bootstrapResult.accepted.length}`);
-  console.log(`Rejected txs: ${bootstrapResult.rejected.length}`);
-  console.log(`RPC listening on http://localhost:${rpcPort}/rpc`);
-  console.log(`Block interval: ${blockIntervalMs}ms`);
+  console.log(`[${nodeId}] bootstrap complete at height ${state.height}`);
+  console.log(`[${nodeId}] RPC listening on http://localhost:${rpcPort}/rpc`);
+  console.log(`[${nodeId}] block interval ${blockIntervalMs}ms`);
   logStateSummary();
 });
+
+function applyBootstrapOnce(): void {
+  if (bootstrapApplied) {
+    return;
+  }
+
+  if (state.height > 0) {
+    bootstrapApplied = true;
+    return;
+  }
+
+  const bootstrapTxs: Transaction[] = [];
+  for (const validator of devnetConfig.validators) {
+    const address = addressByValidatorId.get(validator.id);
+    const keys = keyByValidatorId.get(validator.id);
+    if (!address || !keys) {
+      throw new Error(`missing bootstrap material for ${validator.id}`);
+    }
+
+    bootstrapTxs.push(
+      signTxFor(address, keys.privateKey, {
+        type: "stake",
+        from: address,
+        nonce: 1,
+        amount: BigInt(validator.initialStake),
+      }),
+    );
+    bootstrapTxs.push(
+      signTxFor(address, keys.privateKey, {
+        type: "validator_register",
+        from: address,
+        nonce: 2,
+        amount: 1n,
+        validatorId: validator.id,
+      }),
+    );
+  }
+
+  const bootstrapResult = applyBlock(state, bootstrapTxs, DEFAULT_PROTOCOL_CONFIG, { verifySignature: verifier });
+  bootstrapApplied = true;
+  if (bootstrapResult.rejected.length > 0) {
+    throw new Error(`bootstrap failed with ${bootstrapResult.rejected.length} rejected transactions`);
+  }
+
+  persistNodeData();
+}
+
+function seedInitialMempool(): void {
+  if (nodeId !== devnetConfig.validators[0].id) {
+    return;
+  }
+
+  const toValidator = devnetConfig.validators[1];
+  const toAddress = addressByValidatorId.get(toValidator.id);
+  if (!toAddress) {
+    return;
+  }
+
+  enqueueSignedTx(
+    signTx({
+      type: "transfer",
+      from: selfAddress,
+      to: toAddress,
+      nonce: 3,
+      amount: 25n,
+    }),
+  );
+}
 
 function signTx(input: {
   type: Transaction["type"];
@@ -151,20 +235,31 @@ function signTx(input: {
   to?: string;
   validatorId?: string;
 }): Transaction {
-  const keys = keyByAddress.get(input.from);
-  if (!keys) {
-    throw new Error(`no keys found for address ${input.from}`);
-  }
+  return signTxFor(input.from, selfKeys.privateKey, input);
+}
 
+function signTxFor(
+  from: string,
+  privateKey: string,
+  input: {
+    type: Transaction["type"];
+    from: string;
+    nonce: number;
+    amount: bigint;
+    to?: string;
+    validatorId?: string;
+  },
+): Transaction {
+  const signer = keyByValidatorId.get(validatorByAddress.get(from)?.id ?? nodeId);
+  const signerPublicKey = signer?.publicKey ?? selfKeys.publicKey;
   const txWithoutSig: Transaction = {
     ...input,
-    signerPublicKey: keys.publicKey,
+    signerPublicKey,
     signature: "",
   };
 
   const payload = transactionSigningPayload(txWithoutSig);
-  const signature = signPqMessage(keys.privateKey, payload);
-
+  const signature = signPqMessage(privateKey, payload);
   return {
     ...txWithoutSig,
     signature,
@@ -175,41 +270,255 @@ function enqueueSignedTx(tx: Transaction): { txHash: string } {
   return enqueueValidatedTx(state, mempool, tx, verifier);
 }
 
-function produceBlock(): {
+function getActiveValidatorIds(): string[] {
+  return Object.values(state.validators)
+    .filter((validator) => validator.active && !validator.slashed)
+    .map((validator) => validator.id)
+    .sort();
+}
+
+function isCurrentProposer(): boolean {
+  const active = getActiveValidatorIds();
+  if (active.length === 0) {
+    return false;
+  }
+  const proposer = active[state.height % active.length];
+  return proposer === nodeId;
+}
+
+async function produceDistributedBlock(): Promise<{
   committed: boolean;
   height: number;
   txCount: number;
   proposer: string;
-  slashedValidators: string[];
   reason?: string;
-} {
+}> {
+  if (!isCurrentProposer()) {
+    return {
+      committed: false,
+      height: state.height,
+      txCount: 0,
+      proposer: nodeId,
+      reason: "not proposer for current height",
+    };
+  }
+
   const batch = mempool.splice(0, 100);
+  const proposal: Proposal = {
+    height: state.height + 1,
+    parentHash: state.lastBlockHash,
+    proposerId: nodeId,
+    txs: batch,
+    hash: hashProposal(state.height + 1, state.lastBlockHash, nodeId, batch),
+  };
+
+  pendingProposals.set(proposal.hash, proposal);
+  const selfVote = buildVote(proposal.hash, proposal.height, nodeId, selfKeys.privateKey);
+
+  const votes: Vote[] = [selfVote];
+  const unavailable: string[] = [];
+
+  await Promise.all(
+    peerConfigs.map(async (peer) => {
+      try {
+        const peerVote = await rpcCall<Vote | null>(
+          `http://127.0.0.1:${peer.rpcPort}/rpc`,
+          "qtx_consensusPrepare",
+          [proposal],
+        );
+        if (peerVote) {
+          votes.push(peerVote);
+        } else {
+          unavailable.push(peer.id);
+        }
+      } catch {
+        unavailable.push(peer.id);
+      }
+    }),
+  );
+
   const round = runConsensusRound(state, batch, DEFAULT_PROTOCOL_CONFIG, {
     verifySignature: verifier,
-    unavailableValidatorIds: [...offlineValidators],
+    unavailableValidatorIds: unavailable,
     maxMissedBlocksBeforeSlash: 3,
   });
+
+  if (!round.committed) {
+    mempool.unshift(...batch);
+    pendingProposals.delete(proposal.hash);
+    return {
+      committed: false,
+      height: state.height,
+      txCount: 0,
+      proposer: nodeId,
+      reason: round.reason ?? "quorum not reached",
+    };
+  }
 
   blocks.push({
     height: state.height,
     hash: state.lastBlockHash,
     txCount: round.applyResult?.accepted.length ?? 0,
-    committed: round.committed,
+    committed: true,
   });
+  persistNodeData();
 
-  if (round.reason) {
-    // Failed rounds return txs to mempool for retry.
-    mempool.unshift(...batch);
-  }
+  await Promise.all(
+    peerConfigs.map(async (peer) => {
+      try {
+        await rpcCall(
+          `http://127.0.0.1:${peer.rpcPort}/rpc`,
+          "qtx_consensusCommit",
+          [proposal.hash, votes],
+        );
+      } catch {
+        // Peer will recover via head sync path.
+      }
+    }),
+  );
 
+  pendingProposals.delete(proposal.hash);
   return {
-    committed: round.committed,
+    committed: true,
     height: state.height,
     txCount: round.applyResult?.accepted.length ?? 0,
-    proposer: round.proposerId,
-    slashedValidators: round.slashedValidators,
-    reason: round.reason,
+    proposer: nodeId,
   };
+}
+
+interface RpcStateSnapshot {
+  nodeId: string;
+  height: number;
+  hash: string;
+  blocks?: Array<{ height: number; hash: string; txCount: number; committed: boolean }>;
+  accounts: Record<string, { balance: string; nonce: number; staked: string }>;
+  validators: Record<
+    string,
+    {
+      id: string;
+      owner: string;
+      stake: string;
+      active: boolean;
+      missedBlocks: number;
+      slashed: boolean;
+    }
+  >;
+  pendingUnstakes: Array<{ owner: string; amount: string; unlockAt: number }>;
+  offlineValidators: string[];
+}
+
+interface PersistedNodeData {
+  version: number;
+  nodeId: string;
+  updatedAt: string;
+  state: RpcStateSnapshot;
+}
+
+async function syncFromPeers(): Promise<void> {
+  const heads = await Promise.all(
+    peerConfigs.map(async (peer) => {
+      try {
+        const latest = await rpcCall<{ height: number; hash: string }>(
+          `http://127.0.0.1:${peer.rpcPort}/rpc`,
+          "qtx_getLatestBlock",
+          [],
+        );
+        return {
+          peer,
+          latest,
+        };
+      } catch {
+        return null;
+      }
+    }),
+  );
+
+  const highest = heads
+    .filter((item): item is NonNullable<typeof item> => item !== null)
+    .sort((a, b) => b.latest.height - a.latest.height)[0];
+
+  if (!highest || highest.latest.height <= state.height) {
+    return;
+  }
+
+  const snapshot = await rpcCall<RpcStateSnapshot>(
+    `http://127.0.0.1:${highest.peer.rpcPort}/rpc`,
+    "qtx_getState",
+    [],
+  );
+
+  importStateSnapshot(snapshot);
+  persistNodeData();
+}
+
+function importStateSnapshot(snapshot: RpcStateSnapshot): void {
+  state.height = snapshot.height;
+  state.lastBlockHash = snapshot.hash;
+  state.accounts = Object.fromEntries(
+    Object.entries(snapshot.accounts).map(([address, account]) => [
+      address,
+      {
+        balance: BigInt(account.balance),
+        nonce: account.nonce,
+        staked: BigInt(account.staked),
+      },
+    ]),
+  );
+
+  state.validators = Object.fromEntries(
+    Object.entries(snapshot.validators).map(([id, validator]) => [
+      id,
+      {
+        ...validator,
+        stake: BigInt(validator.stake),
+      },
+    ]),
+  );
+
+  state.pendingUnstakes = snapshot.pendingUnstakes.map((entry) => ({
+    owner: entry.owner,
+    amount: BigInt(entry.amount),
+    unlockAt: entry.unlockAt,
+  }));
+
+  blocks.length = 0;
+  for (const block of snapshot.blocks ?? []) {
+    blocks.push(block);
+  }
+
+  offlineValidators.clear();
+  for (const validatorId of snapshot.offlineValidators) {
+    offlineValidators.add(validatorId);
+  }
+}
+
+function buildVote(proposalHash: string, height: number, voterId: string, privateKey: string): Vote {
+  const payload = `${proposalHash}:${height}:${voterId}`;
+  return {
+    proposalHash,
+    height,
+    voterId,
+    signature: signPqMessage(privateKey, payload),
+  };
+}
+
+function verifyVote(vote: Vote): boolean {
+  const key = keyByValidatorId.get(vote.voterId);
+  if (!key) {
+    return false;
+  }
+  const payload = `${vote.proposalHash}:${vote.height}:${vote.voterId}`;
+  return verifyPqSignature(key.publicKey, payload, vote.signature);
+}
+
+function hashProposal(height: number, parentHash: string, proposerId: string, txs: Transaction[]): string {
+  return createHash("sha256")
+    .update(
+      `${height}:${parentHash}:${proposerId}:${txs
+        .map((tx) => transactionSigningPayload(tx))
+        .join("|")}`,
+    )
+    .digest("hex");
 }
 
 async function handleRpcRequest(method: string, params: unknown[]): Promise<unknown> {
@@ -224,7 +533,8 @@ async function handleRpcRequest(method: string, params: unknown[]): Promise<unkn
         staked: account?.staked.toString() ?? "0",
       };
     }
-    case "qtx_getBlockHead": {
+    case "qtx_getBlockHead":
+    case "qtx_getLatestBlock": {
       return {
         height: state.height,
         hash: state.lastBlockHash,
@@ -237,16 +547,51 @@ async function handleRpcRequest(method: string, params: unknown[]): Promise<unkn
       }));
     }
     case "qtx_getMempool": {
-      return mempool.map((tx) => ({
-        hash: hashTx(tx),
-        from: tx.from,
-        nonce: tx.nonce,
-        type: tx.type,
-      }));
+      return mempool.map((tx) => ({ hash: hashTx(tx), from: tx.from, nonce: tx.nonce, type: tx.type }));
     }
     case "qtx_submitTransaction": {
       const tx = parseRpcTransactionStrict(params[0]);
       return enqueueSignedTx(tx);
+    }
+    case "qtx_consensusPrepare": {
+      const proposal = params[0] as Proposal;
+      if (!proposal || proposal.height !== state.height + 1 || proposal.parentHash !== state.lastBlockHash) {
+        return null;
+      }
+
+      const expected = hashProposal(proposal.height, proposal.parentHash, proposal.proposerId, proposal.txs);
+      if (proposal.hash !== expected) {
+        return null;
+      }
+
+      pendingProposals.set(proposal.hash, proposal);
+      return buildVote(proposal.hash, proposal.height, nodeId, selfKeys.privateKey);
+    }
+    case "qtx_consensusCommit": {
+      const proposalHash = String(params[0] ?? "");
+      const votes = (params[1] as Vote[]) ?? [];
+      const proposal = pendingProposals.get(proposalHash);
+      if (!proposal) {
+        return { committed: false, reason: "unknown proposal" };
+      }
+
+      const validVotes = votes.filter((vote) => vote.proposalHash === proposalHash && verifyVote(vote));
+      const activeCount = getActiveValidatorIds().length;
+      const quorum = Math.floor((activeCount * 2) / 3) + 1;
+      if (validVotes.length < quorum) {
+        return { committed: false, reason: "insufficient commit votes" };
+      }
+
+      const applyResult = applyBlock(state, proposal.txs, DEFAULT_PROTOCOL_CONFIG, { verifySignature: verifier });
+      blocks.push({
+        height: state.height,
+        hash: state.lastBlockHash,
+        txCount: applyResult.accepted.length,
+        committed: true,
+      });
+      persistNodeData();
+      pendingProposals.delete(proposalHash);
+      return { committed: true, height: state.height, accepted: applyResult.accepted.length };
     }
     case "qtx_markValidatorOffline": {
       const validatorId = String(params[0] ?? "");
@@ -264,21 +609,20 @@ async function handleRpcRequest(method: string, params: unknown[]): Promise<unkn
         offlineValidators.delete(validatorId);
       }
 
-      return {
-        validatorId,
-        offline,
-      };
+      persistNodeData();
+
+      return { validatorId, offline };
     }
     case "qtx_slashEquivocation": {
       const validatorId = String(params[0] ?? "");
       const slashed = slashValidatorForEquivocation(state, validatorId, 10);
-      return {
-        validatorId,
-        slashed,
-      };
+      if (slashed) {
+        persistNodeData();
+      }
+      return { validatorId, slashed };
     }
     case "qtx_produceBlock": {
-      return produceBlock();
+      return produceDistributedBlock();
     }
     case "qtx_seedTransfer": {
       const to = String(params[0] ?? "");
@@ -295,10 +639,11 @@ async function handleRpcRequest(method: string, params: unknown[]): Promise<unkn
           field: "amount",
         });
       }
-      const nextNonce = getNextExpectedNonce(state, mempool, alice);
+
+      const nextNonce = getNextExpectedNonce(state, mempool, selfAddress);
       const tx = signTx({
         type: "transfer",
-        from: alice,
+        from: selfAddress,
         to,
         nonce: nextNonce,
         amount,
@@ -306,31 +651,17 @@ async function handleRpcRequest(method: string, params: unknown[]): Promise<unkn
       return enqueueSignedTx(tx);
     }
     case "qtx_getState": {
-      return serializeForJson({
-        height: state.height,
-        hash: state.lastBlockHash,
-        accounts: state.accounts,
-        validators: state.validators,
-        pendingUnstakes: state.pendingUnstakes,
-        offlineValidators: [...offlineValidators],
-      });
+      return buildStateSnapshot();
     }
     default:
-      throw new RpcError(RpcErrorCode.METHOD_NOT_FOUND, `unsupported method: ${method}`, {
-        method,
-      });
+      throw new RpcError(RpcErrorCode.METHOD_NOT_FOUND, `unsupported method: ${method}`, { method });
   }
 }
 
 function logStateSummary(): void {
-  console.log("State summary:", {
+  console.log(`[${nodeId}] state summary`, {
     height: state.height,
     hash: state.lastBlockHash,
-    balances: {
-      [alice]: state.accounts[alice],
-      [bob]: state.accounts[bob],
-      [carol]: state.accounts[carol],
-    },
     validators: Object.keys(state.validators),
   });
 }
@@ -353,4 +684,67 @@ function serializeForJson<T>(value: T): T {
   return JSON.parse(
     JSON.stringify(value, (_, current) => (typeof current === "bigint" ? current.toString() : current)),
   ) as T;
+}
+
+function fail(message: string): never {
+  throw new Error(message);
+}
+
+function loadStateFromDisk(): void {
+  const persisted = loadPersistedNodeData<PersistedNodeData>(dataDir);
+  if (!persisted || persisted.nodeId !== nodeId) {
+    return;
+  }
+
+  importStateSnapshot(persisted.state);
+  bootstrapApplied = state.height > 0;
+}
+
+function persistNodeData(): void {
+  const snapshot = buildStateSnapshot();
+
+  savePersistedNodeData<PersistedNodeData>(dataDir, {
+    version: 1,
+    nodeId,
+    updatedAt: new Date().toISOString(),
+    state: snapshot,
+  });
+}
+
+function buildStateSnapshot(): RpcStateSnapshot {
+  return {
+    nodeId,
+    height: state.height,
+    hash: state.lastBlockHash,
+    blocks: blocks.map((block) => ({ ...block })),
+    accounts: Object.fromEntries(
+      Object.entries(state.accounts).map(([address, account]) => [
+        address,
+        {
+          balance: account.balance.toString(),
+          nonce: account.nonce,
+          staked: account.staked.toString(),
+        },
+      ]),
+    ),
+    validators: Object.fromEntries(
+      Object.entries(state.validators).map(([validatorId, validator]) => [
+        validatorId,
+        {
+          id: validator.id,
+          owner: validator.owner,
+          stake: validator.stake.toString(),
+          active: validator.active,
+          missedBlocks: validator.missedBlocks,
+          slashed: validator.slashed,
+        },
+      ]),
+    ),
+    pendingUnstakes: state.pendingUnstakes.map((entry) => ({
+      owner: entry.owner,
+      amount: entry.amount.toString(),
+      unlockAt: entry.unlockAt,
+    })),
+    offlineValidators: [...offlineValidators],
+  };
 }

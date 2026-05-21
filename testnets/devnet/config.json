@@ -1,0 +1,27 @@
+{
+  "chainId": "quantix-devnet",
+  "blockIntervalMs": 4000,
+  "validators": [
+    {
+      "id": "validator-alice",
+      "seedHex": "1111111111111111111111111111111111111111111111111111111111111111",
+      "rpcPort": 7331,
+      "initialBalance": "1000",
+      "initialStake": "100"
+    },
+    {
+      "id": "validator-bob",
+      "seedHex": "2222222222222222222222222222222222222222222222222222222222222222",
+      "rpcPort": 7332,
+      "initialBalance": "1000",
+      "initialStake": "100"
+    },
+    {
+      "id": "validator-carol",
+      "seedHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "rpcPort": 7333,
+      "initialBalance": "1000",
+      "initialStake": "100"
+    }
+  ]
+}

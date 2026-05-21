@@ -9,6 +9,7 @@
   ],
   "scripts": {
     "build": "npm run -ws build",
+    "dev:devnet": "tsx tools/devnet/run-3node.ts",
     "dev:node": "npm run -w @quantix/node dev",
     "test": "tsx --test tests/**/*.test.ts",
     "typecheck": "npm run -ws typecheck",
