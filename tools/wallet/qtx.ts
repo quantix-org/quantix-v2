@@ -6,8 +6,8 @@
  *   tsx tools/wallet/qtx.ts <command> [options]
  *
  * Commands:
- *   new        [--output <file>]                    Generate a new wallet
- *   import     <seed-hex> [--output <file>]         Import wallet from 64-char seed
+ *   new        [<output-file>] [--output <file>]     Generate a new wallet
+ *   import     <seed-hex> [<output-file>]             Import wallet from 64-char seed
  *   address    [--key <file>]                       Show address from keyfile
  *   balance    <address> [--rpc <url>]              Query account balance & nonce
  *   send       <to> <amount> --key <f> [options]    Transfer QTX
@@ -217,12 +217,15 @@ function makeKeyfile(seed: string): Keyfile {
 
 // ─── Commands ────────────────────────────────────────────────────────────────
 
-// qtx new [--output <file>]
+// qtx new [<output-file>] [--output <file>]
 function cmdNew(args: Args) {
   header("Generate New Wallet");
   const seed = randomBytes(32).toString("hex");
   const kf   = makeKeyfile(seed);
-  const out  = args.output;
+  // Accept output path as first positional OR via --output flag.
+  // This handles both: `qtx new ./mywallet.key.json`
+  // and the npm-flag-safe form: `npm run qtx -- new --output ./mywallet.key.json`
+  const out  = args.positional[0] ?? args.output;
   saveKey(out, kf);
 
   row("Address",  cyan(kf.address));
@@ -237,17 +240,18 @@ function cmdNew(args: Args) {
   console.log();
 }
 
-// qtx import <seed-hex> [--output <file>]
+// qtx import <seed-hex> [<output-file>] [--output <file>]
 function cmdImport(args: Args) {
   const seed = args.positional[0];
-  if (!seed) die("Usage: qtx import <seed-hex>");
+  if (!seed) die("Usage: qtx import <seed-hex> [output-file]");
   if (!/^[0-9a-fA-F]{64}$/.test(seed)) {
     die("Seed must be exactly 64 hex characters (32 bytes).");
   }
 
   header("Import Wallet");
   const kf  = makeKeyfile(seed.toLowerCase());
-  const out = args.output;
+  // Accept output path as second positional OR via --output flag.
+  const out = args.positional[1] ?? args.output;
   saveKey(out, kf);
 
   row("Address",  cyan(kf.address));
@@ -451,6 +455,7 @@ async function cmdBlock(args: Args) {
     row("Proposer",    magenta(bFull.proposer ?? "—"));
     row("Tx Count",    bFull.txCount?.toString() ?? "0");
     row("Status",      bFull.committed ? green("committed") : yellow("pending"));
+    row("Timestamp",   bFull.timestamp ? new Date(bFull.timestamp).toISOString() : gray("—"));
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const txs = bFull.txs as any[];
@@ -460,6 +465,7 @@ async function cmdBlock(args: Args) {
       for (const tx of txs) {
         console.log(`  ${yellow("•")} ${gray(trunc(tx.hash, 20))} ${dim(tx.type.padEnd(20))} ${formatQtx(BigInt(tx.amount))}`);
         console.log(`    ${gray("from:")} ${cyan(trunc(tx.from, 28))}  ${gray("nonce:")} ${tx.nonce}`);
+        if (tx.timestamp) console.log(`    ${gray("time: ")} ${gray(new Date(tx.timestamp).toISOString())}`);
         if (tx.to)          console.log(`    ${gray("to:  ")} ${cyan(trunc(tx.to, 28))}`);
         if (tx.validatorId) console.log(`    ${gray("vid: ")} ${magenta(tx.validatorId)}`);
       }
@@ -494,6 +500,7 @@ async function cmdTx(args: Args) {
     row("Amount",       green(formatQtxFull(BigInt(t.amount))));
     row("Fee",          formatQtx(BigInt(t.fee)));
     row("Nonce",        t.nonce.toString());
+    if (t.timestamp) row("Timestamp", new Date(t.timestamp).toISOString());
     console.log();
   } catch (e) {
     handleRpcError(e);

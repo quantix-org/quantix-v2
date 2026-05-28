@@ -16,7 +16,8 @@
  *   --addr   <a,b,…> Comma-separated target addresses (overrides built-in list)
  */
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import {
   getNextNonce,
   buildTransferTx,
@@ -87,6 +88,13 @@ function loadKey(path: string): Keyfile {
   return JSON.parse(readFileSync(path, "utf8")) as Keyfile;
 }
 
+function loadAllWallets(dir: string): Keyfile[] {
+  return readdirSync(dir)
+    .filter(f => /^mywallet.*\.key\.json$/.test(f))
+    .sort()
+    .map(f => loadKey(join(dir, f)));
+}
+
 function parseArgv(argv: string[]) {
   const raw: Record<string, string> = {};
   for (let i = 0; i < argv.length; i++) {
@@ -98,7 +106,7 @@ function parseArgv(argv: string[]) {
   return {
     key:   raw["key"]   ?? "./my-wallet.key.json",
     rpc:   raw["rpc"]   ?? "http://localhost:7331/rpc",
-    count: parseInt(raw["count"] ?? "500", 10),
+    count: parseInt(raw["count"] ?? "7200", 10),
     min:   parseQtx(raw["min"]   ?? "5"),
     max:   parseQtx(raw["max"]   ?? "25"),
     fee:   parseQtx(raw["fee"]   ?? "0.4942"),
@@ -113,6 +121,14 @@ function parseArgv(argv: string[]) {
 const BUILTIN_TARGETS = [
   "qtx15e5baf49a6e135feab84703edae9a72b993ea3",
   "qtx133b75517903403a21b1a14a18f84d89b6041eb",
+  // mywallet*.key.json
+  "qtx12a1769a88ae83a4319cb4897bcf267e5b1f992",  // mywallet.key.json
+  "qtx1fb7439badb7062000cec6965848f93b45edcd1",  // mywallet1.key.json
+  "qtx14cbb7892a4bdd6dc2f425b08858af2ed9f0d9c",  // mywallet2.key.json
+  "qtx12fe805d8a4eca9edaee93b5e1fbdb37f9d9a35",  // mywallet3.key.json
+  "qtx1b448db243108713e5c0c0388719eab72b45dbf",  // mywallet4.key.json
+  "qtx11184c74dcf161c92ba4ee2a5126cac0626eae1",  // mywallet5.key.json
+  "qtx1e8e182f230b5a40d96841678c340fecbf1a3bf",  // mywallet6.key.json
 ];
 
 function pick<T>(arr: T[]): T {
@@ -126,12 +142,16 @@ function sleep(ms: number) {
 async function main() {
   const args    = parseArgv(process.argv.slice(2));
   const targets = args.extraAddrs.length > 0 ? args.extraAddrs : BUILTIN_TARGETS;
-  const kf      = loadKey(args.key);
+
+  // Load sender pool from all mywallet*.key.json files; fall back to --key
+  let wallets = loadAllWallets(process.cwd());
+  if (wallets.length === 0) wallets = [loadKey(args.key)];
 
   console.log(`\n${cyan("─".repeat(60))}`);
   console.log(`  ${bold(cyan("⬡"))} ${bold("Quantix TX Spammer")}`);
   console.log(`${cyan("─".repeat(60))}\n`);
-  console.log(`  ${dim("Sender")}    ${cyan(kf.address)}`);
+  console.log(`  ${dim("Senders")}   ${wallets.length} wallet${wallets.length > 1 ? "s" : ""} (random)`);
+  for (const w of wallets) console.log(`             ${cyan(w.address)}`);
   console.log(`  ${dim("Targets")}   ${targets.map(a => cyan(a.slice(0, 16) + "…")).join(", ")}`);
   console.log(`  ${dim("Count")}     ${args.count}`);
   console.log(`  ${dim("Amount")}    ${formatQtx(args.min)} – ${formatQtx(args.max)}`);
@@ -140,16 +160,20 @@ async function main() {
   console.log(`  ${dim("Delay")}     ${args.delay}ms`);
   console.log(`\n${cyan("─".repeat(60))}\n`);
 
-  // Fetch starting nonce once, then increment manually
-  let nonce = await getNextNonce(args.rpc, kf.address);
-  console.log(`  ${dim("Starting nonce:")} ${nonce}\n`);
 
-  const col = { n: 6, to: 18, amt: 14, hash: 18, status: 8 };
+
+  // Track the *next* nonce to use per address while txs are in-flight in the
+  // mempool.  On success we increment locally; on failure we clear so the
+  // next attempt fetches the confirmed nonce fresh from the node.
+  const pendingNonce = new Map<string, number>();
+
+  const col = { n: 5, from: 16, to: 16, amt: 14, hash: 26, status: 8 };
   const hdr = [
     bold("#").padEnd(col.n),
+    bold("From").padEnd(col.from),
     bold("To").padEnd(col.to),
     bold("Amount").padEnd(col.amt),
-    bold("Tx Hash").padEnd(col.hash + 10),
+    bold("Tx Hash").padEnd(col.hash),
     bold("Status"),
   ].join("  ");
   console.log("  " + hdr);
@@ -162,32 +186,42 @@ async function main() {
     const to     = pick(targets);
     const amount = randBig(args.min, args.max);
     const num    = String(i + 1).padEnd(col.n);
+    const sender = pick(wallets);
+    // Use the locally-tracked pending nonce when available (previous tx still
+    // in mempool), otherwise fetch the confirmed nonce from the node.
+    const nonce = pendingNonce.has(sender.address)
+      ? pendingNonce.get(sender.address)!
+      : await getNextNonce(args.rpc, sender.address);
 
     try {
       const tx = buildTransferTx({
-        from:            kf.address,
+        from:            sender.address,
         to,
         nonce,
         amount,
         fee:             args.fee,
-        signerPublicKey: kf.publicKey,
-        privateKey:      kf.privateKey,
+        signerPublicKey: sender.publicKey,
+        privateKey:      sender.privateKey,
       });
 
       const { txHash } = await submitTx(args.rpc, tx);
-      const shortTo   = (to.slice(0, 14) + "…").padEnd(col.to);
+      const shortFrom = ("…" + sender.address.slice(-13)).padEnd(col.from);
+      const shortTo   = ("…" + to.slice(-13)).padEnd(col.to);
       const shortAmt  = formatQtx(amount).padEnd(col.amt);
-      const shortHash = (txHash.slice(0, 16) + "…").padEnd(col.hash + 10);
+      const shortHash = (txHash.slice(0, 24) + "…").padEnd(col.hash);
 
-      console.log(`  ${num}  ${cyan(shortTo)}  ${green(shortAmt)}  ${yellow(shortHash)}  ${green("✓ ok")}`);
-      nonce++;
+      console.log(`  ${num}  ${magenta(shortFrom)}  ${cyan(shortTo)}  ${green(shortAmt)}  ${yellow(shortHash)}  ${green("✓ ok")}`);
+      // Advance pending nonce so the next tx from this address chains correctly
+      pendingNonce.set(sender.address, nonce + 1);
       ok++;
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      const shortTo = (to.slice(0, 14) + "…").padEnd(col.to);
-      console.log(`  ${num}  ${cyan(shortTo)}  ${red("error".padEnd(col.amt))}  ${gray("─".padEnd(col.hash + 10))}  ${red("✗ " + msg.slice(0, 100))}`);
+      const msg       = e instanceof Error ? e.message : String(e);
+      const shortFrom = ("…" + sender.address.slice(-13)).padEnd(col.from);
+      const shortTo   = ("…" + to.slice(-13)).padEnd(col.to);
+      console.log(`  ${num}  ${magenta(shortFrom)}  ${cyan(shortTo)}  ${red("error".padEnd(col.amt))}  ${gray("─".padEnd(col.hash))}  ${red("✗ " + msg.slice(0, 80))}`);
       fail++;
-      // Don't increment nonce on failure — retry same nonce next iteration
+      // Clear pending nonce on failure so the next tx re-fetches from node
+      pendingNonce.delete(sender.address);
     }
 
     if (args.delay > 0 && i < args.count - 1) {

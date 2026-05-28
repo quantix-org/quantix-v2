@@ -11,6 +11,7 @@ function createSignedTransfer(fromKey: { privateKey: string; publicKey: string }
     from,
     to,
     nonce,
+    timestamp: Date.now(),
     amount: 10n,
     fee: 0n,
     signerPublicKey: fromKey.publicKey,

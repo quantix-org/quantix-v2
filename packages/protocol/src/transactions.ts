@@ -107,8 +107,8 @@ export function applyTransaction(
       return true;
     }
     case "validator_register": {
-      // Validator ID is always the sender's own address.
-      const id = tx.from;
+      // Prefer the explicit validatorId field; fall back to the sender's address.
+      const id = tx.validatorId ?? tx.from;
       if (state.validators[id]) {
         return "validator already registered";
       }
@@ -138,7 +138,29 @@ export function applyTransaction(
           active: true,
           missedBlocks: 0,
           slashed: false,
+          inactiveBlocks: 0,
         };
+      }
+      return true;
+    }
+    case "validator_unregister": {
+      // A validator voluntarily exits the active set and removes their registration.
+      // Their staked balance is NOT burned — they may subsequently submit an `unstake` tx.
+      const id = tx.validatorId ?? tx.from;
+      const inValidators = !!state.validators[id];
+      const pendingIdx = inValidators ? -1 : state.pendingValidators.findIndex((p) => p.id === id);
+      if (!inValidators && pendingIdx === -1) {
+        return "not a registered validator";
+      }
+      if (sender.balance < config.baseFee + tx.fee) {
+        return "insufficient balance for fees";
+      }
+      sender.balance -= config.baseFee + tx.fee;
+      sender.nonce += 1;
+      if (inValidators) {
+        delete state.validators[id];
+      } else {
+        state.pendingValidators.splice(pendingIdx, 1);
       }
       return true;
     }
@@ -198,6 +220,7 @@ function activatePendingValidators(state: ProtocolState, config: ProtocolConfig)
       active: true,
       missedBlocks: 0,
       slashed: false,
+      inactiveBlocks: 0,
     };
     activated.add(pending.id);
     remaining -= 1;
@@ -211,6 +234,7 @@ export function transactionSigningPayload(tx: Transaction): string {
     type: tx.type,
     from: tx.from,
     nonce: tx.nonce,
+    timestamp: tx.timestamp,
     amount: tx.amount.toString(),
     fee: tx.fee.toString(),
     to: tx.to ?? null,

@@ -8,6 +8,8 @@ export interface BlockProposal {
   parentHash: string;
   proposerId: string;
   txs: Transaction[];
+  /** Unix millisecond timestamp — set by proposer at proposal time. */
+  timestamp: number;
 }
 
 export interface ConsensusRoundResult {
@@ -18,6 +20,7 @@ export interface ConsensusRoundResult {
   quorum: number;
   unavailableValidators: string[];
   slashedValidators: string[];
+  ejectedValidators: string[];
   applyResult?: ApplyResult;
   reason?: string;
 }
@@ -25,6 +28,18 @@ export interface ConsensusRoundResult {
 export interface ConsensusOptions extends ApplyOptions {
   unavailableValidatorIds?: string[];
   maxMissedBlocksBeforeSlash?: number;
+  /**
+   * Consecutive blocks of inactivity before a validator is forcibly ejected
+   * and has `inactivityBurnPercent` of their stake burned. Default: 10000.
+   */
+  inactivityEjectionBlocks?: number;
+  /**
+   * Percentage of staked balance burned when a validator is ejected for
+   * prolonged inactivity. Default: 50.
+   */
+  inactivityBurnPercent?: number;
+  /** Unix millisecond timestamp of the block being proposed. Defaults to Date.now(). */
+  blockTimestamp?: number;
 }
 
 export function runConsensusRound(
@@ -46,10 +61,13 @@ export function runConsensusRound(
       quorum: 0,
       unavailableValidators: [],
       slashedValidators: [],
+      ejectedValidators: [],
       reason: "no active validators",
     };
   }
 
+  // Byzantine fault-tolerant quorum: floor(2n/3)+1 — tolerates floor((n-1)/3) failures.
+  // n=4 → 3, n=10 → 7, n=20 → 14. Scales correctly for larger validator sets.
   const quorum = Math.floor((activeValidators.length * 2) / 3) + 1;
   const unavailable = new Set(options.unavailableValidatorIds ?? []);
   const participatingValidators = activeValidators.filter((validator) => !unavailable.has(validator.id));
@@ -59,6 +77,7 @@ export function runConsensusRound(
     parentHash: state.lastBlockHash,
     proposerId: proposer.id,
     txs,
+    timestamp: options.blockTimestamp ?? Date.now(),
   };
 
   const proposalHash = hashProposal(proposal);
@@ -76,25 +95,52 @@ export function runConsensusRound(
       quorum,
       unavailableValidators: [...unavailable],
       slashedValidators: [],
+      ejectedValidators: [],
       reason: "quorum not reached",
     };
   }
 
   const slashedValidators: string[] = [];
-  for (const validator of activeValidators) {
-    if (unavailable.has(validator.id)) {
-      const slashed = markValidatorMissedBlock(
-        state,
-        validator.id,
-        options.maxMissedBlocksBeforeSlash ?? 3,
-      );
-      if (slashed) {
-        slashedValidators.push(validator.id);
-      }
+  const ejectedValidators: string[] = [];
+  const participatingIds = new Set(participatingValidators.map((v) => v.id));
+  const ejectionThreshold = options.inactivityEjectionBlocks ?? 10000;
+  const burnPercent = options.inactivityBurnPercent ?? 50;
+
+  // Single pass over ALL registered validators:
+  //  • Participating  → reset missedBlocks + inactiveBlocks
+  //  • Unavailable-active → markValidatorMissedBlock (existing slash logic) + inactiveBlocks++
+  //  • Already-slashed → inactiveBlocks++
+  // Any validator reaching ejectionThreshold consecutive inactive blocks is
+  // removed from the validator set and loses burnPercent% of their stake.
+  for (const vid of Object.keys(state.validators)) {
+    const v = state.validators[vid];
+    if (!v) continue;
+
+    if (participatingIds.has(vid)) {
+      v.missedBlocks = 0;
+      v.inactiveBlocks = 0;
+      state.validators[vid] = v;
     } else {
-      // Healthy participation resets missed block streak.
-      validator.missedBlocks = 0;
-      state.validators[validator.id] = validator;
+      v.inactiveBlocks = (v.inactiveBlocks ?? 0) + 1;
+
+      // Apply missed-block slash for active validators that were called but unavailable.
+      if (!v.slashed && unavailable.has(vid)) {
+        const wasSlashed = markValidatorMissedBlock(
+          state,
+          vid,
+          options.maxMissedBlocksBeforeSlash ?? 3,
+        );
+        if (wasSlashed) slashedValidators.push(vid);
+      } else {
+        state.validators[vid] = v;
+      }
+
+      // Check inactivity ejection (re-read in case markValidatorMissedBlock mutated state).
+      const current = state.validators[vid];
+      if (current && current.inactiveBlocks >= ejectionThreshold) {
+        ejectInactiveValidator(state, vid, burnPercent);
+        ejectedValidators.push(vid);
+      }
     }
   }
 
@@ -107,6 +153,7 @@ export function runConsensusRound(
     quorum,
     unavailableValidators: [...unavailable],
     slashedValidators,
+    ejectedValidators,
     applyResult,
   };
 }
@@ -131,6 +178,30 @@ export function markValidatorMissedBlock(
 
   state.validators[validatorId] = validator;
   return false;
+}
+
+/**
+ * Hard-eject a validator that has exceeded the inactivity threshold:
+ * removes their record from the validator set and burns `burnPercent`% of
+ * their staked balance. The remaining stake stays in their account so they
+ * can unstake it after the cooldown period.
+ */
+function ejectInactiveValidator(
+  state: ProtocolState,
+  validatorId: string,
+  burnPercent: number,
+): void {
+  const v = state.validators[validatorId];
+  if (!v) return;
+
+  const owner = state.accounts[v.owner];
+  if (owner && owner.staked > 0n) {
+    const burnAmount = (owner.staked * BigInt(burnPercent)) / 100n;
+    owner.staked = owner.staked > burnAmount ? owner.staked - burnAmount : 0n;
+    state.accounts[v.owner] = owner;
+  }
+
+  delete state.validators[validatorId];
 }
 
 export function slashValidatorForEquivocation(
@@ -161,6 +232,6 @@ export function slashValidatorForEquivocation(
 function hashProposal(proposal: BlockProposal): string {
   const canonicalTxs = proposal.txs.map((tx) => transactionSigningPayload(tx));
   return createHash("sha256")
-    .update(`${proposal.height}:${proposal.parentHash}:${proposal.proposerId}:${canonicalTxs.join("|")}`)
+    .update(`${proposal.height}:${proposal.parentHash}:${proposal.proposerId}:${proposal.timestamp}:${canonicalTxs.join("|")}`)
     .digest("hex");
 }

@@ -17,7 +17,9 @@
     "maxTxPerBlock": 100,
     "quorumRule": "floor(2n/3)+1",
     "maxMissedBlocksBeforeSlash": 3,
-    "equivocationSlashPercent": 10
+    "equivocationSlashPercent": 10,
+    "inactivityEjectionBlocks": 10000,
+    "inactivityBurnPercent": 50
   },
   "protocolParams": {
     "minValidatorStake": "32",

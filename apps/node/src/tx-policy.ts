@@ -9,6 +9,7 @@ const TX_TYPES = new Set<Transaction["type"]>([
   "stake",
   "unstake",
   "validator_register",
+  "validator_unregister",
 ]);
 
 export function parseRpcTransactionStrict(input: unknown): Transaction {
@@ -23,6 +24,10 @@ export function parseRpcTransactionStrict(input: unknown): Transaction {
   const type = mustBeTxType(candidate.type);
   const from = mustBeAddress(candidate.from, "from");
   const nonce = mustBeNonce(candidate.nonce);
+  const timestamp =
+    typeof candidate.timestamp === "number" && candidate.timestamp > 0
+      ? candidate.timestamp
+      : Date.now(); // fallback for older clients
   const amount = mustBePositiveAmount(candidate.amount);
   const fee = mustBeNonNegativeAmount(candidate.fee);
   const signerPublicKey = mustBeHex(candidate.signerPublicKey, "signerPublicKey");
@@ -32,6 +37,7 @@ export function parseRpcTransactionStrict(input: unknown): Transaction {
     type,
     from,
     nonce,
+    timestamp,
     amount,
     fee,
     signerPublicKey,

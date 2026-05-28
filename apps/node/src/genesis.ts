@@ -21,6 +21,15 @@ export interface GenesisConsensus {
   quorumRule: string;
   maxMissedBlocksBeforeSlash: number;
   equivocationSlashPercent: number;
+  /**
+   * Consecutive inactive blocks before a validator is ejected and penalized.
+   * Default: 10000.
+   */
+  inactivityEjectionBlocks?: number;
+  /**
+   * Percentage of staked balance burned when ejected for inactivity. Default: 50.
+   */
+  inactivityBurnPercent?: number;
 }
 
 export interface GenesisBootstrapNode {

@@ -35,6 +35,7 @@ export interface BlockDetailResult {
   hash: string;
   txCount: number;
   committed: boolean;
+  timestamp: number;
 }
 
 export interface ValidatorInfo {
@@ -111,6 +112,7 @@ function serializeTx(tx: Transaction): Record<string, unknown> {
     type: tx.type,
     from: tx.from,
     nonce: tx.nonce,
+    timestamp: tx.timestamp,
     amount: tx.amount.toString(),
     fee: tx.fee.toString(),
     signerPublicKey: tx.signerPublicKey,
@@ -162,6 +164,7 @@ export function buildTransferTx(params: TransferParams): Transaction {
       from: params.from,
       to: params.to,
       nonce: params.nonce,
+      timestamp: Date.now(),
       amount: params.amount,
       fee: params.fee ?? 0n,
       signerPublicKey: params.signerPublicKey,
@@ -180,6 +183,7 @@ export function buildStakeTx(params: StakeParams): Transaction {
       type: "stake",
       from: params.from,
       nonce: params.nonce,
+      timestamp: Date.now(),
       amount: params.amount,
       fee: params.fee ?? 0n,
       signerPublicKey: params.signerPublicKey,
@@ -198,6 +202,7 @@ export function buildUnstakeTx(params: UnstakeParams): Transaction {
       type: "unstake",
       from: params.from,
       nonce: params.nonce,
+      timestamp: Date.now(),
       amount: params.amount,
       fee: params.fee ?? 0n,
       signerPublicKey: params.signerPublicKey,
@@ -217,6 +222,7 @@ export function buildValidatorRegisterTx(params: ValidatorRegisterParams): Trans
       from: params.from,
       validatorId: params.validatorId,
       nonce: params.nonce,
+      timestamp: Date.now(),
       amount: params.amount,
       fee: params.fee ?? 0n,
       signerPublicKey: params.signerPublicKey,

@@ -17,7 +17,9 @@
     "maxTxPerBlock": 100,
     "quorumRule": "floor(2n/3)+1",
     "maxMissedBlocksBeforeSlash": 3,
-    "equivocationSlashPercent": 10
+    "equivocationSlashPercent": 10,
+    "inactivityEjectionBlocks": 10000,
+    "inactivityBurnPercent": 50
   },
   "protocolParams": {
     "minValidatorStake": "32",
@@ -61,6 +63,34 @@
     "accounts": [
       {
         "address": "qtx170639fcac3fdc0b94d440b567437f3be21ecb1",
+        "balance": "5000000000000000000000000"
+      },
+      {
+        "address": "qtx12a1769a88ae83a4319cb4897bcf267e5b1f992",
+        "balance": "5000000000000000000000000"
+      },
+      {
+        "address": "qtx1fb7439badb7062000cec6965848f93b45edcd1",
+        "balance": "5000000000000000000000000"
+      },
+      {
+        "address": "qtx14cbb7892a4bdd6dc2f425b08858af2ed9f0d9c",
+        "balance": "5000000000000000000000000"
+      },
+      {
+        "address": "qtx12fe805d8a4eca9edaee93b5e1fbdb37f9d9a35",
+        "balance": "5000000000000000000000000"
+      },
+      {
+        "address": "qtx1b448db243108713e5c0c0388719eab72b45dbf",
+        "balance": "5000000000000000000000000"
+      },
+      {
+        "address": "qtx11184c74dcf161c92ba4ee2a5126cac0626eae1",
+        "balance": "5000000000000000000000000"
+      },
+      {
+        "address": "qtx1e8e182f230b5a40d96841678c340fecbf1a3bf",
         "balance": "5000000000000000000000000"
       }
     ]

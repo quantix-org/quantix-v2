@@ -25,6 +25,7 @@ interface Proposal {
   proposerId: string;
   txs: Transaction[];
   hash: string;
+  timestamp: number;
 }
 
 interface Vote {
@@ -107,7 +108,9 @@ const isSeedNode = selfConfig !== undefined && isSeedNodeConfig(selfConfig);
 // External validators connect to the bootstrap nodes from genesis (not config.json).
 // Config-based nodes connect to all other config-based nodes.
 const peerConfigs: PeerRef[] = externalSeedHex
-  ? genesis.network.peerDiscovery.bootstrapNodes.map((n) => ({ id: n.id, rpcPort: 0 }))
+  ? genesis.network.peerDiscovery.bootstrapNodes
+      .filter((n) => n.id !== nodeId)
+      .map((n) => ({ id: n.id, rpcPort: 0 }))
   : allNodeConfigs.filter((n) => n.id !== nodeId).map((n) => ({ id: n.id, rpcPort: n.rpcPort }));
 
 const peerEndpointById = new Map<string, string>(
@@ -161,6 +164,12 @@ if (rpcPort === 0) {
   throw new Error("External validator must set QTX_RPC_PORT env var.");
 }
 
+// Proposer skip: counts block intervals where state.height didn't advance.
+// When the scheduled proposer is offline, the slot rotates forward so the next
+// online validator steps in. Resets to 0 each time a new block is committed.
+let consecutiveStalls = 0;
+let lastSeenHeightAtBlockTick = -1;
+
 (async () => {
   await store.open();
   await loadStateFromDisk();
@@ -170,6 +179,16 @@ if (rpcPort === 0) {
 
   setInterval(() => {
   void (async () => {
+    // Stall detection: if height hasn't advanced since last tick, rotate the
+    // proposer slot forward so the next online validator can step up.
+    if (state.height === lastSeenHeightAtBlockTick) {
+      const maxSkip = Math.max(0, getActiveValidatorIds().length - 1);
+      consecutiveStalls = Math.min(consecutiveStalls + 1, maxSkip);
+    } else {
+      consecutiveStalls = 0;
+    }
+    lastSeenHeightAtBlockTick = state.height;
+
     try {
       const r = await produceDistributedBlock();
       if (r.committed) {
@@ -362,6 +381,7 @@ function signTxFor(
   const txWithoutSig: Transaction = {
     ...input,
     fee: input.fee ?? 0n,
+    timestamp: Date.now(),
     signerPublicKey,
     signature: "",
   };
@@ -390,7 +410,8 @@ function isCurrentProposer(): boolean {
   if (active.length === 0) {
     return false;
   }
-  const proposer = active[state.height % active.length];
+  // Shift proposer slot by stall count so offline proposers are skipped.
+  const proposer = active[(state.height + consecutiveStalls) % active.length];
   return proposer === selfAddress;
 }
 
@@ -418,13 +439,15 @@ async function produceDistributedBlock(): Promise<{
   // Keep batch in mempool during consensus so getNextExpectedNonce stays consistent
   // while awaiting peer votes. Committed txs are removed by hash after applyBlock.
   const batch = mempool.slice(0, genesis.consensus.maxTxPerBlock);
-  console.log(`${ts()} [${nodeId}] → proposing block #${state.height + 1}  mempool=${batch.length} txs  asking ${peerConfigs.length} peers`);
+  const stallSuffix = consecutiveStalls > 0 ? `  skip=${consecutiveStalls}` : "";
+  console.log(`${ts()} [${nodeId}] → proposing block #${state.height + 1}  mempool=${batch.length} txs  asking ${peerConfigs.length} peers${stallSuffix}`);
   const proposal: Proposal = {
     height: state.height + 1,
     parentHash: state.lastBlockHash,
     proposerId: selfAddress,
     txs: batch,
-    hash: hashProposal(state.height + 1, state.lastBlockHash, selfAddress, batch),
+    timestamp: t0,
+    hash: hashProposal(state.height + 1, state.lastBlockHash, selfAddress, t0, batch),
   };
 
   pendingProposals.set(proposal.hash, proposal);
@@ -460,7 +483,16 @@ async function produceDistributedBlock(): Promise<{
     verifySignature: verifier,
     unavailableValidatorIds: unavailable,
     maxMissedBlocksBeforeSlash: genesis.consensus.maxMissedBlocksBeforeSlash,
+    inactivityEjectionBlocks: genesis.consensus.inactivityEjectionBlocks ?? 10000,
+    inactivityBurnPercent: genesis.consensus.inactivityBurnPercent ?? 50,
+    blockTimestamp: proposal.timestamp,
   });
+
+  if (round.ejectedValidators.length > 0) {
+    console.warn(
+      `${ts()} [${nodeId}] ⚠ inactivity ejection: ${round.ejectedValidators.join(", ")} removed + 50% stake burned`,
+    );
+  }
 
   if (!round.committed) {
     pendingProposals.delete(proposal.hash);
@@ -493,6 +525,7 @@ async function produceDistributedBlock(): Promise<{
     parentHash: proposal.parentHash,
     proposer: nodeId,
     txCount: acceptedTxs.length,
+    timestamp: proposal.timestamp,
     txs: acceptedTxs.map(txToStored),
     committed: true,
   });
@@ -540,6 +573,7 @@ interface RpcStateSnapshot {
       active: boolean;
       missedBlocks: number;
       slashed: boolean;
+      inactiveBlocks?: number;
     }
   >;
   pendingUnstakes: Array<{ owner: string; amount: string; unlockAt: number }>;
@@ -612,6 +646,7 @@ function importStateSnapshot(snapshot: RpcStateSnapshot): void {
       {
         ...validator,
         stake: BigInt(validator.stake),
+        inactiveBlocks: validator.inactiveBlocks ?? 0,
       },
     ]),
   );
@@ -659,10 +694,10 @@ function verifyVote(vote: Vote): boolean {
   return verifyPqSignature(vote.signerPublicKey, payload, vote.signature);
 }
 
-function hashProposal(height: number, parentHash: string, proposerId: string, txs: Transaction[]): string {
+function hashProposal(height: number, parentHash: string, proposerId: string, timestamp: number, txs: Transaction[]): string {
   return createHash("sha256")
     .update(
-      `${height}:${parentHash}:${proposerId}:${txs
+      `${height}:${parentHash}:${proposerId}:${timestamp}:${txs
         .map((tx) => transactionSigningPayload(tx))
         .join("|")}`,
     )
@@ -788,7 +823,7 @@ async function handleRpcRequest(method: string, params: unknown[]): Promise<unkn
     }
     case "qtx_consensusPrepare": {
       const raw = params[0] as Proposal;
-      if (!raw || raw.height !== state.height + 1 || raw.parentHash !== state.lastBlockHash) {
+      if (!raw || raw.height !== state.height + 1 || raw.parentHash !== state.lastBlockHash || !raw.timestamp) {
         return null;
       }
 
@@ -798,7 +833,7 @@ async function handleRpcRequest(method: string, params: unknown[]): Promise<unkn
         txs: (raw.txs as unknown[]).map((t) => parseRpcTransactionStrict(t)),
       };
 
-      const expected = hashProposal(proposal.height, proposal.parentHash, proposal.proposerId, proposal.txs);
+      const expected = hashProposal(proposal.height, proposal.parentHash, proposal.proposerId, proposal.timestamp, proposal.txs);
       if (proposal.hash !== expected) {
         return null;
       }
@@ -806,8 +841,11 @@ async function handleRpcRequest(method: string, params: unknown[]): Promise<unkn
       const activeForHeight = Object.values(state.validators)
         .filter((v) => v.active && !v.slashed)
         .sort((a, b) => a.id.localeCompare(b.id));
-      const expectedProposer = activeForHeight[state.height % activeForHeight.length]?.id;
-      if (proposal.proposerId !== expectedProposer) {
+      // Accept any active validator as proposer. Strict rotation is enforced by
+      // the proposer itself (via consecutiveStalls skip). Rejecting backup
+      // proposers here would stall the chain when the primary is offline.
+      const isActiveValidator = activeForHeight.some((v) => v.id === proposal.proposerId);
+      if (!isActiveValidator) {
         return null;
       }
 
@@ -847,6 +885,7 @@ async function handleRpcRequest(method: string, params: unknown[]): Promise<unkn
         parentHash: proposal.parentHash,
         proposer: proposal.proposerId,
         txCount: applyResult.accepted.length,
+        timestamp: proposal.timestamp,
         txs: applyResult.accepted.map(txToStored),
         committed: true,
       });
@@ -1020,6 +1059,7 @@ function txToStored(tx: Transaction): StoredTx {
     type: tx.type,
     from: tx.from,
     nonce: tx.nonce,
+    timestamp: tx.timestamp ?? 0,
     amount: tx.amount.toString(),
     fee: tx.fee.toString(),
     ...(tx.to !== undefined ? { to: tx.to } : {}),
@@ -1044,7 +1084,7 @@ async function loadStateFromDisk(): Promise<void> {
   state.validators = Object.fromEntries(
     Object.entries(snapshot.validators).map(([id, validator]) => [
       id,
-      { ...validator, stake: BigInt(validator.stake) },
+      { ...validator, stake: BigInt(validator.stake), inactiveBlocks: validator.inactiveBlocks ?? 0 },
     ]),
   );
   state.pendingUnstakes = snapshot.pendingUnstakes.map((entry) => ({
@@ -1098,6 +1138,7 @@ function buildNodeSnapshot(): NodeSnapshot {
           active: validator.active,
           missedBlocks: validator.missedBlocks,
           slashed: validator.slashed,
+          inactiveBlocks: validator.inactiveBlocks,
         },
       ]),
     ),
@@ -1141,6 +1182,7 @@ function buildStateSnapshot(): RpcStateSnapshot {
           active: validator.active,
           missedBlocks: validator.missedBlocks,
           slashed: validator.slashed,
+          inactiveBlocks: validator.inactiveBlocks,
         },
       ]),
     ),

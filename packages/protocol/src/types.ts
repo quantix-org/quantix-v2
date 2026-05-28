@@ -1,11 +1,13 @@
 export type Address = string;
 
-export type TxType = "transfer" | "stake" | "unstake" | "validator_register";
+export type TxType = "transfer" | "stake" | "unstake" | "validator_register" | "validator_unregister";
 
 export interface Transaction {
   type: TxType;
   from: Address;
   nonce: number;
+  /** Unix millisecond timestamp — set by the sender, included in the signing payload. */
+  timestamp: number;
   amount: bigint;
   fee: bigint;
   signerPublicKey: string;
@@ -29,6 +31,8 @@ export interface ValidatorState {
   active: boolean;
   missedBlocks: number;
   slashed: boolean;
+  /** Consecutive blocks this validator has not participated in. Resets to 0 on participation. */
+  inactiveBlocks: number;
 }
 
 export interface PendingValidatorEntry {

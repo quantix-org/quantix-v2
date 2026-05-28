@@ -85,13 +85,14 @@ test("commits block when quorum is met", () => {
       : "invalid pq signature";
   };
 
-  const signTx = (input: Omit<Transaction, "signerPublicKey" | "signature" | "fee"> & { fee?: bigint }): Transaction => {
+  const signTx = (input: Omit<Transaction, "signerPublicKey" | "signature" | "fee" | "timestamp"> & { fee?: bigint }): Transaction => {
     const keyPair = keyByAddress.get(input.from);
     if (!keyPair) {
       throw new Error("missing keypair for signer");
     }
     const unsignedTx: Transaction = {
       fee: 0n,
+      timestamp: Date.now(),
       ...input,
       signerPublicKey: keyPair.publicKey,
       signature: "",
@@ -133,21 +134,26 @@ test("slashes validator after repeated downtime", () => {
   const alice = generatePqKeyPair();
   const bob = generatePqKeyPair();
   const carol = generatePqKeyPair();
+  const dave = generatePqKeyPair();
 
   const aliceAddress = deriveAddressFromPublicKey(alice.publicKey);
   const bobAddress = deriveAddressFromPublicKey(bob.publicKey);
   const carolAddress = deriveAddressFromPublicKey(carol.publicKey);
+  const daveAddress = deriveAddressFromPublicKey(dave.publicKey);
 
+  // 4 validators so quorum = floor(8/3)+1 = 3; vb can be absent while the other 3 still commit.
   const state = createGenesisState({
     [aliceAddress]: 1_000n,
     [bobAddress]: 1_000n,
     [carolAddress]: 1_000n,
+    [daveAddress]: 1_000n,
   });
 
   const keyByAddress = new Map([
     [aliceAddress, alice],
     [bobAddress, bob],
     [carolAddress, carol],
+    [daveAddress, dave],
   ]);
 
   const verifySignature = (tx: Transaction, payload: string): true | string => {
@@ -159,13 +165,14 @@ test("slashes validator after repeated downtime", () => {
       : "invalid pq signature";
   };
 
-  const signTx = (input: Omit<Transaction, "signerPublicKey" | "signature" | "fee"> & { fee?: bigint }): Transaction => {
+  const signTx = (input: Omit<Transaction, "signerPublicKey" | "signature" | "fee" | "timestamp"> & { fee?: bigint }): Transaction => {
     const keyPair = keyByAddress.get(input.from);
     if (!keyPair) {
       throw new Error("missing keypair for signer");
     }
     const unsignedTx: Transaction = {
       fee: 0n,
+      timestamp: Date.now(),
       ...input,
       signerPublicKey: keyPair.publicKey,
       signature: "",
@@ -184,6 +191,8 @@ test("slashes validator after repeated downtime", () => {
     signTx({ type: "validator_register", from: bobAddress, nonce: 2, amount: 1n, validatorId: "vb" }),
     signTx({ type: "stake", from: carolAddress, nonce: 1, amount: 100n }),
     signTx({ type: "validator_register", from: carolAddress, nonce: 2, amount: 1n, validatorId: "vc" }),
+    signTx({ type: "stake", from: daveAddress, nonce: 1, amount: 100n }),
+    signTx({ type: "validator_register", from: daveAddress, nonce: 2, amount: 1n, validatorId: "vd" }),
   ];
 
   const bootstrapResult = applyBlock(state, bootstrap, DEFAULT_PROTOCOL_CONFIG, { verifySignature });
@@ -239,10 +248,10 @@ function makeSignHelpers(keyByAddress: Map<string, { publicKey: string; privateK
     return verifyPqSignature(tx.signerPublicKey, payload, tx.signature) ? true : "invalid pq signature";
   };
 
-  const signTx = (input: Omit<Transaction, "signerPublicKey" | "signature" | "fee"> & { fee?: bigint }): Transaction => {
+  const signTx = (input: Omit<Transaction, "signerPublicKey" | "signature" | "fee" | "timestamp"> & { fee?: bigint }): Transaction => {
     const keyPair = keyByAddress.get(input.from);
     if (!keyPair) throw new Error(`missing keypair for ${input.from}`);
-    const unsignedTx: Transaction = { fee: 0n, ...input, signerPublicKey: keyPair.publicKey, signature: "" };
+    const unsignedTx: Transaction = { fee: 0n, timestamp: Date.now(), ...input, signerPublicKey: keyPair.publicKey, signature: "" };
     return { ...unsignedTx, signature: signPqMessage(keyPair.privateKey, transactionSigningPayload(unsignedTx)) };
   };
 

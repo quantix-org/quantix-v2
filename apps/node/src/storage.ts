@@ -17,6 +17,7 @@ export interface StoredValidator {
   active: boolean;
   missedBlocks: number;
   slashed: boolean;
+  inactiveBlocks?: number;
 }
 
 export interface StoredTx {
@@ -24,6 +25,7 @@ export interface StoredTx {
   type: string;
   from: string;
   nonce: number;
+  timestamp: number;
   amount: string;
   fee: string;
   to?: string;
@@ -36,6 +38,8 @@ export interface StoredBlock {
   parentHash: string;
   proposer: string;
   txCount: number;
+  /** Unix millisecond timestamp when the block was committed. */
+  timestamp: number;
   txs: StoredTx[];
   committed: boolean;
 }
