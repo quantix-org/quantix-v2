@@ -12,6 +12,7 @@ function createSignedTransfer(fromKey: { privateKey: string; publicKey: string }
     to,
     nonce,
     amount: 10n,
+    fee: 0n,
     signerPublicKey: fromKey.publicKey,
     signature: "",
   };

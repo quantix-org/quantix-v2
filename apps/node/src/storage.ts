@@ -1,29 +1,189 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { ClassicLevel } from "classic-level";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
-const STORE_FILE = "node-state.json";
+// ─── Stored types ─────────────────────────────────────────────────────────────
 
-export function loadPersistedNodeData<T>(dataDir: string): T | null {
-  const filePath = join(dataDir, STORE_FILE);
-  try {
-    const raw = readFileSync(filePath, "utf8");
-    return JSON.parse(raw) as T;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") {
-      return null;
-    }
-    throw error;
-  }
+export interface StoredAccount {
+  balance: string;
+  nonce: number;
+  staked: string;
 }
 
-export function savePersistedNodeData<T>(dataDir: string, data: T): void {
-  mkdirSync(dataDir, { recursive: true });
+export interface StoredValidator {
+  id: string;
+  owner: string;
+  stake: string;
+  active: boolean;
+  missedBlocks: number;
+  slashed: boolean;
+}
 
-  const filePath = join(dataDir, STORE_FILE);
-  const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
-  const payload = JSON.stringify(data, null, 2);
+export interface StoredTx {
+  hash: string;
+  type: string;
+  from: string;
+  nonce: number;
+  amount: string;
+  fee: string;
+  to?: string;
+  validatorId?: string;
+}
 
-  writeFileSync(tempPath, payload, "utf8");
-  renameSync(tempPath, filePath);
+export interface StoredBlock {
+  height: number;
+  hash: string;
+  parentHash: string;
+  proposer: string;
+  txCount: number;
+  txs: StoredTx[];
+  committed: boolean;
+}
+
+export interface StoredPendingUnstake {
+  owner: string;
+  amount: string;
+  unlockAt: number;
+}
+
+export interface StoredPendingValidator {
+  id: string;
+  owner: string;
+  registeredAtHeight: number;
+}
+
+export interface NodeSnapshot {
+  nodeId: string;
+  height: number;
+  lastHash: string;
+  accounts: Record<string, StoredAccount>;
+  validators: Record<string, StoredValidator>;
+  blocks: StoredBlock[];
+  pendingUnstakes: StoredPendingUnstake[];
+  pendingValidators: StoredPendingValidator[];
+  offlineValidators: string[];
+}
+
+// ─── Key helpers ──────────────────────────────────────────────────────────────
+
+const K = {
+  nodeId:            () => "meta:nodeId",
+  height:            () => "meta:height",
+  lastHash:          () => "meta:lastHash",
+  account:           (addr: string)   => `account:${addr}`,
+  validator:         (id: string)     => `validator:${id}`,
+  block:             (height: number) => `block:${String(height).padStart(10, "0")}`,
+  pendingUnstakes:   () => "array:pendingUnstakes",
+  pendingValidators: () => "array:pendingValidators",
+  offlineValidators: () => "array:offlineValidators",
+} as const;
+
+// ─── NodeStore ────────────────────────────────────────────────────────────────
+
+export class NodeStore {
+  private db: ClassicLevel<string, string>;
+  private writeQueue: Promise<void> = Promise.resolve();
+
+  constructor(dataDir: string) {
+    mkdirSync(dataDir, { recursive: true });
+    this.db = new ClassicLevel<string, string>(join(dataDir, "leveldb"), {
+      valueEncoding: "utf8",
+    });
+  }
+
+  async open(): Promise<void> {
+    await this.db.open();
+  }
+
+  async close(): Promise<void> {
+    await this.writeQueue;
+    await this.db.close();
+  }
+
+  // ── Load all persisted state ───────────────────────────────────────────────
+
+  async load(): Promise<NodeSnapshot | null> {
+      const heightStr = await this.db.get(K.height());
+      if (heightStr === undefined) return null;  // fresh/empty DB
+      const nodeId   = await this.db.get(K.nodeId());
+      const lastHash = await this.db.get(K.lastHash());
+      if (nodeId === undefined || lastHash === undefined) return null;  // partial write
+      const height   = Number(heightStr);
+
+      const accounts: Record<string, StoredAccount> = {};
+      for await (const [key, value] of this.db.iterator({ gte: "account:", lte: "account:\xff" })) {
+        accounts[key.slice("account:".length)] = JSON.parse(value) as StoredAccount;
+      }
+
+      const validators: Record<string, StoredValidator> = {};
+      for await (const [key, value] of this.db.iterator({ gte: "validator:", lte: "validator:\xff" })) {
+        validators[key.slice("validator:".length)] = JSON.parse(value) as StoredValidator;
+      }
+
+      const blocks: StoredBlock[] = [];
+      for await (const [, value] of this.db.iterator({ gte: "block:", lte: "block:\xff" })) {
+        blocks.push(JSON.parse(value) as StoredBlock);
+      }
+
+      const pendingUnstakes   = await this.getJson<StoredPendingUnstake[]>(K.pendingUnstakes(),   []);
+      const pendingValidators = await this.getJson<StoredPendingValidator[]>(K.pendingValidators(), []);
+      const offlineValidators = await this.getJson<string[]>(K.offlineValidators(), []);
+
+      return { nodeId, height, lastHash, accounts, validators, blocks, pendingUnstakes, pendingValidators, offlineValidators };
+  }
+
+  // ── Save (fire-and-forget, internally queued) ─────────────────────────────
+
+  save(snapshot: NodeSnapshot): void {
+    this.writeQueue = this.writeQueue
+      .then(() => this.writeBatch(snapshot))
+      .catch((err: unknown) => {
+        console.error("[storage] write error:", err);
+      });
+  }
+
+  // ── History queries (for explorer / CLI) ──────────────────────────────────
+
+  async getBlock(height: number): Promise<StoredBlock | null> {
+    return this.getJson<StoredBlock | null>(K.block(height), null);
+  }
+
+  async getAccount(address: string): Promise<StoredAccount | null> {
+    return this.getJson<StoredAccount | null>(K.account(address), null);
+  }
+
+  async getValidator(id: string): Promise<StoredValidator | null> {
+    return this.getJson<StoredValidator | null>(K.validator(id), null);
+  }
+
+  // ── Private ───────────────────────────────────────────────────────────────
+
+  private async writeBatch(snapshot: NodeSnapshot): Promise<void> {
+    const ops: Array<{ type: "put"; key: string; value: string }> = [
+      { type: "put", key: K.nodeId(),            value: snapshot.nodeId },
+      { type: "put", key: K.height(),            value: String(snapshot.height) },
+      { type: "put", key: K.lastHash(),          value: snapshot.lastHash },
+      { type: "put", key: K.pendingUnstakes(),   value: JSON.stringify(snapshot.pendingUnstakes) },
+      { type: "put", key: K.pendingValidators(), value: JSON.stringify(snapshot.pendingValidators) },
+      { type: "put", key: K.offlineValidators(), value: JSON.stringify(snapshot.offlineValidators) },
+    ];
+
+    for (const [addr, acc] of Object.entries(snapshot.accounts)) {
+      ops.push({ type: "put", key: K.account(addr),      value: JSON.stringify(acc) });
+    }
+    for (const [id, val] of Object.entries(snapshot.validators)) {
+      ops.push({ type: "put", key: K.validator(id),      value: JSON.stringify(val) });
+    }
+    for (const block of snapshot.blocks) {
+      ops.push({ type: "put", key: K.block(block.height), value: JSON.stringify(block) });
+    }
+
+    await this.db.batch(ops);
+  }
+
+  private async getJson<T>(key: string, fallback: T): Promise<T> {
+    const raw = await this.db.get(key);
+    if (raw === undefined) return fallback;
+    return JSON.parse(raw) as T;
+  }
 }

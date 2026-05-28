@@ -7,6 +7,7 @@ export interface Transaction {
   from: Address;
   nonce: number;
   amount: bigint;
+  fee: bigint;
   signerPublicKey: string;
   signature: string;
   to?: Address;
@@ -30,11 +31,24 @@ export interface ValidatorState {
   slashed: boolean;
 }
 
+export interface PendingValidatorEntry {
+  id: string;
+  owner: Address;
+  registeredAtHeight: number;
+}
+
 export interface ProtocolConfig {
   chainId: string;
   minValidatorStake: bigint;
   unstakeCooldownBlocks: number;
   baseFee: bigint;
+  /** Max number of concurrently active validators. 0 = unlimited. */
+  maxActiveValidators: number;
+  /**
+   * How many blocks between epoch boundaries at which pending validators
+   * are activated. 0 = activate immediately (legacy behaviour).
+   */
+  epochLength: number;
 }
 
 export interface ProtocolState {
@@ -47,4 +61,6 @@ export interface ProtocolState {
     amount: bigint;
     unlockAt: number;
   }>;
+  /** Validators whose registration is queued until the next epoch boundary. */
+  pendingValidators: PendingValidatorEntry[];
 }

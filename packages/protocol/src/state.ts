@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { AccountState, Address, ProtocolState, ValidatorState } from "./types.js";
+import type { AccountState, Address, PendingValidatorEntry, ProtocolState, ValidatorState } from "./types.js";
 
 export function createGenesisState(initialBalances: Record<Address, bigint>): ProtocolState {
   const accounts: Record<Address, AccountState> = {};
@@ -14,10 +14,11 @@ export function createGenesisState(initialBalances: Record<Address, bigint>): Pr
 
   return {
     height: 0,
-    lastBlockHash: hashState(0, "genesis", accounts, {}),
+    lastBlockHash: hashState(0, "genesis", accounts, {}, []),
     accounts,
     validators: {},
     pendingUnstakes: [],
+    pendingValidators: [],
   };
 }
 
@@ -28,6 +29,7 @@ export function cloneState(state: ProtocolState): ProtocolState {
     accounts: structuredClone(state.accounts),
     validators: structuredClone(state.validators),
     pendingUnstakes: structuredClone(state.pendingUnstakes),
+    pendingValidators: structuredClone(state.pendingValidators),
   };
 }
 
@@ -64,7 +66,7 @@ export function updateBlockHead(
   validators: Record<string, ValidatorState>,
 ): void {
   state.height += 1;
-  state.lastBlockHash = hashState(state.height, `${state.lastBlockHash}:${txCount}`, state.accounts, validators);
+  state.lastBlockHash = hashState(state.height, `${state.lastBlockHash}:${txCount}`, state.accounts, validators, state.pendingValidators);
 }
 
 function hashState(
@@ -72,6 +74,7 @@ function hashState(
   seed: string,
   accounts: Record<Address, AccountState>,
   validators: Record<string, ValidatorState>,
+  pending: PendingValidatorEntry[],
 ): string {
   const accountPairs = Object.entries(accounts)
     .sort(([a], [b]) => a.localeCompare(b))
@@ -83,5 +86,10 @@ function hashState(
     .map(([id, data]) => `${id}:${data.owner}:${data.stake}:${data.active}:${data.slashed}`)
     .join("|");
 
-  return createHash("sha256").update(`${height}:${seed}:${accountPairs}:${validatorPairs}`).digest("hex");
+  const pendingPairs = [...pending]
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((p) => `${p.id}:${p.owner}:${p.registeredAtHeight}`)
+    .join("|");
+
+  return createHash("sha256").update(`${height}:${seed}:${accountPairs}:${validatorPairs}:${pendingPairs}`).digest("hex");
 }

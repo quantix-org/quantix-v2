@@ -1,32 +1,34 @@
 {
-  "seedNode": {
-    "id": "seednode",
-    "seedHex": "0000000000000000000000000000000000000000000000000000000000000001",
-    "rpcPort": 7330,
-    "initialBalance": "1000",
-    "initialStake": "100"
-  },
+  "chainId": "quantix-devnet-4",
+  "blockIntervalMs": 4000,
   "validators": [
     {
       "id": "validator-alice",
       "seedHex": "1111111111111111111111111111111111111111111111111111111111111111",
-      "rpcPort": 7331,
+      "rpcPort": 7341,
       "initialBalance": "1000",
-      "stakeAmount": "100"
+      "initialStake": "100"
     },
     {
       "id": "validator-bob",
       "seedHex": "2222222222222222222222222222222222222222222222222222222222222222",
-      "rpcPort": 7332,
+      "rpcPort": 7342,
       "initialBalance": "1000",
-      "stakeAmount": "100"
+      "initialStake": "100"
     },
     {
       "id": "validator-carol",
       "seedHex": "3333333333333333333333333333333333333333333333333333333333333333",
-      "rpcPort": 7333,
+      "rpcPort": 7343,
       "initialBalance": "1000",
-      "stakeAmount": "100"
+      "initialStake": "100"
+    },
+    {
+      "id": "validator-dave",
+      "seedHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "rpcPort": 7344,
+      "initialBalance": "1000",
+      "initialStake": "100"
     }
   ]
 }

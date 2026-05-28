@@ -7,6 +7,7 @@ import {
   slashValidatorForEquivocation,
   runConsensusRound,
   transactionSigningPayload,
+  type ProtocolConfig,
   type Transaction,
 } from "@quantix/protocol";
 import {
@@ -33,6 +34,7 @@ test("rejects invalid signature", () => {
     to: bobAddress,
     nonce: 1,
     amount: 10n,
+    fee: 0n,
     signerPublicKey: alice.publicKey,
     signature: "deadbeef",
   };
@@ -83,12 +85,13 @@ test("commits block when quorum is met", () => {
       : "invalid pq signature";
   };
 
-  const signTx = (input: Omit<Transaction, "signerPublicKey" | "signature">): Transaction => {
+  const signTx = (input: Omit<Transaction, "signerPublicKey" | "signature" | "fee"> & { fee?: bigint }): Transaction => {
     const keyPair = keyByAddress.get(input.from);
     if (!keyPair) {
       throw new Error("missing keypair for signer");
     }
     const unsignedTx: Transaction = {
+      fee: 0n,
       ...input,
       signerPublicKey: keyPair.publicKey,
       signature: "",
@@ -156,12 +159,13 @@ test("slashes validator after repeated downtime", () => {
       : "invalid pq signature";
   };
 
-  const signTx = (input: Omit<Transaction, "signerPublicKey" | "signature">): Transaction => {
+  const signTx = (input: Omit<Transaction, "signerPublicKey" | "signature" | "fee"> & { fee?: bigint }): Transaction => {
     const keyPair = keyByAddress.get(input.from);
     if (!keyPair) {
       throw new Error("missing keypair for signer");
     }
     const unsignedTx: Transaction = {
+      fee: 0n,
       ...input,
       signerPublicKey: keyPair.publicKey,
       signature: "",
@@ -217,4 +221,161 @@ test("slashes validator for equivocation", () => {
   assert.equal(state.validators.v1.slashed, true);
   assert.equal(state.validators.v1.active, false);
   assert.equal(state.accounts[ownerAddress].staked, 90n);
+});
+
+// ---------------------------------------------------------------------------
+// Pending validator queue tests
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a minimal verifySignature + signTx helper for a given key map.
+ * Extracted here so the queue tests below stay concise.
+ */
+function makeSignHelpers(keyByAddress: Map<string, { publicKey: string; privateKey: string }>) {
+  const verifySignature = (tx: Transaction, payload: string): true | string => {
+    if (deriveAddressFromPublicKey(tx.signerPublicKey) !== tx.from) {
+      return "signer address mismatch";
+    }
+    return verifyPqSignature(tx.signerPublicKey, payload, tx.signature) ? true : "invalid pq signature";
+  };
+
+  const signTx = (input: Omit<Transaction, "signerPublicKey" | "signature" | "fee"> & { fee?: bigint }): Transaction => {
+    const keyPair = keyByAddress.get(input.from);
+    if (!keyPair) throw new Error(`missing keypair for ${input.from}`);
+    const unsignedTx: Transaction = { fee: 0n, ...input, signerPublicKey: keyPair.publicKey, signature: "" };
+    return { ...unsignedTx, signature: signPqMessage(keyPair.privateKey, transactionSigningPayload(unsignedTx)) };
+  };
+
+  return { verifySignature, signTx };
+}
+
+test("validator_register queues to pendingValidators when epochLength > 0", () => {
+  const alice = generatePqKeyPair();
+  const aliceAddress = deriveAddressFromPublicKey(alice.publicKey);
+  const state = createGenesisState({ [aliceAddress]: 1_000n });
+
+  const config: ProtocolConfig = { ...DEFAULT_PROTOCOL_CONFIG, epochLength: 10 };
+  const { verifySignature, signTx } = makeSignHelpers(new Map([[aliceAddress, alice]]));
+
+  const result = applyBlock(
+    state,
+    [
+      signTx({ type: "stake", from: aliceAddress, nonce: 1, amount: 100n }),
+      signTx({ type: "validator_register", from: aliceAddress, nonce: 2, amount: 1n, validatorId: "va" }),
+    ],
+    config,
+    { verifySignature },
+  );
+
+  assert.equal(result.rejected.length, 0, "transactions should be accepted");
+  assert.equal(state.validators["va"], undefined, "validator must not be active yet");
+  assert.equal(state.pendingValidators.length, 1, "validator should be in pending queue");
+  assert.equal(state.pendingValidators[0].id, "va");
+});
+
+test("duplicate validator_register is rejected when already pending", () => {
+  const alice = generatePqKeyPair();
+  const aliceAddress = deriveAddressFromPublicKey(alice.publicKey);
+  const state = createGenesisState({ [aliceAddress]: 1_000n });
+
+  const config: ProtocolConfig = { ...DEFAULT_PROTOCOL_CONFIG, epochLength: 10 };
+  const { verifySignature, signTx } = makeSignHelpers(new Map([[aliceAddress, alice]]));
+
+  applyBlock(
+    state,
+    [
+      signTx({ type: "stake", from: aliceAddress, nonce: 1, amount: 100n }),
+      signTx({ type: "validator_register", from: aliceAddress, nonce: 2, amount: 1n, validatorId: "va" }),
+    ],
+    config,
+    { verifySignature },
+  );
+
+  const second = applyBlock(
+    state,
+    [signTx({ type: "validator_register", from: aliceAddress, nonce: 3, amount: 1n, validatorId: "va" })],
+    config,
+    { verifySignature },
+  );
+
+  assert.equal(second.rejected.length, 1);
+  assert.match(second.rejected[0].reason, /already pending/);
+});
+
+test("pending validators are activated at epoch boundary", () => {
+  const alice = generatePqKeyPair();
+  const aliceAddress = deriveAddressFromPublicKey(alice.publicKey);
+  const state = createGenesisState({ [aliceAddress]: 1_000n });
+
+  const epochLength = 5;
+  const config: ProtocolConfig = { ...DEFAULT_PROTOCOL_CONFIG, epochLength };
+  const { verifySignature, signTx } = makeSignHelpers(new Map([[aliceAddress, alice]]));
+
+  // Block 1 — stake + register (goes to pending queue).
+  applyBlock(
+    state,
+    [
+      signTx({ type: "stake", from: aliceAddress, nonce: 1, amount: 100n }),
+      signTx({ type: "validator_register", from: aliceAddress, nonce: 2, amount: 1n, validatorId: "va" }),
+    ],
+    config,
+    { verifySignature },
+  );
+
+  assert.equal(state.height, 1);
+  assert.equal(state.validators["va"], undefined, "not active before epoch boundary");
+  assert.equal(state.pendingValidators.length, 1);
+
+  // Blocks 2-4 — empty blocks, still before epoch boundary (height 5).
+  for (let i = 0; i < 3; i++) {
+    applyBlock(state, [], config, { verifySignature });
+  }
+  assert.equal(state.height, 4);
+  assert.equal(state.validators["va"], undefined, "still not active at height 4");
+
+  // Block 5 — this is the epoch boundary (nextHeight = 5 = 5 % 5 === 0).
+  applyBlock(state, [], config, { verifySignature });
+
+  assert.equal(state.height, 5);
+  assert.ok(state.validators["va"], "validator should be active after epoch boundary");
+  assert.equal(state.validators["va"].active, true);
+  assert.equal(state.pendingValidators.length, 0, "pending queue should be empty");
+});
+
+test("maxActiveValidators caps how many pending validators are activated per epoch", () => {
+  const keys = Array.from({ length: 4 }, () => generatePqKeyPair());
+  const addresses = keys.map((k) => deriveAddressFromPublicKey(k.publicKey));
+  const keyByAddress = new Map(keys.map((k, i) => [addresses[i], k]));
+
+  const balances = Object.fromEntries(addresses.map((addr) => [addr, 1_000n]));
+  const state = createGenesisState(balances);
+
+  const config: ProtocolConfig = { ...DEFAULT_PROTOCOL_CONFIG, epochLength: 3, maxActiveValidators: 2 };
+  const { verifySignature, signTx } = makeSignHelpers(keyByAddress);
+
+  // Stake + register all 4 validators in block 1.
+  const registerTxs = addresses.flatMap((addr, i) => [
+    signTx({ type: "stake", from: addr, nonce: 1, amount: 100n }),
+    signTx({ type: "validator_register", from: addr, nonce: 2, amount: 1n, validatorId: `v${i}` }),
+  ]);
+  applyBlock(state, registerTxs, config, { verifySignature });
+  assert.equal(state.pendingValidators.length, 4, "all 4 should be queued");
+
+  // Blocks 2-3 — reach first epoch boundary (nextHeight = 3).
+  applyBlock(state, [], config, { verifySignature });
+  applyBlock(state, [], config, { verifySignature });
+
+  // Only 2 should be activated (maxActiveValidators = 2, currently 0 active).
+  const activeAfterFirstEpoch = Object.values(state.validators).filter((v) => v.active).length;
+  assert.equal(activeAfterFirstEpoch, 2, "first epoch activates only 2 validators");
+  assert.equal(state.pendingValidators.length, 2, "2 remain in the queue");
+
+  // Second epoch boundary (nextHeight = 6) — 2 active already, cap = 2, so 0 slots.
+  applyBlock(state, [], config, { verifySignature });
+  applyBlock(state, [], config, { verifySignature });
+  applyBlock(state, [], config, { verifySignature });
+
+  const activeAfterSecondEpoch = Object.values(state.validators).filter((v) => v.active).length;
+  assert.equal(activeAfterSecondEpoch, 2, "cap prevents further activations when already at max");
+  assert.equal(state.pendingValidators.length, 2, "remaining validators still queued");
 });

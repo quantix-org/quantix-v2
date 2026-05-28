@@ -9,6 +9,8 @@ export interface ApplyResult {
 
 export interface ApplyOptions {
   verifySignature: SignatureVerifier;
+  /** When true, validator_register activates immediately (bypasses epoch queue). Use only for genesis bootstrap. */
+  genesisBootstrap?: boolean;
 }
 
 export function applyBlock(
@@ -31,6 +33,7 @@ export function applyBlock(
     }
   }
 
+  activatePendingValidators(state, config);
   updateBlockHead(state, accepted.length, state.validators);
   return { accepted, rejected };
 }
@@ -55,12 +58,16 @@ export function applyTransaction(
     return "amount must be > 0";
   }
 
+  if (tx.fee < 0n) {
+    return "fee must be >= 0";
+  }
+
   const sender = ensureAccount(state, tx.from);
   if (tx.nonce !== sender.nonce + 1) {
     return "invalid nonce";
   }
 
-  const totalDebit = tx.amount + config.baseFee;
+  const totalDebit = tx.amount + config.baseFee + tx.fee;
   if (sender.balance < totalDebit) {
     return "insufficient balance";
   }
@@ -86,8 +93,11 @@ export function applyTransaction(
       if (sender.staked < tx.amount) {
         return "insufficient staked balance";
       }
+      if (sender.balance < config.baseFee + tx.fee) {
+        return "insufficient balance for fees";
+      }
       sender.staked -= tx.amount;
-      sender.balance -= config.baseFee;
+      sender.balance -= config.baseFee + tx.fee;
       sender.nonce += 1;
       state.pendingUnstakes.push({
         owner: tx.from,
@@ -97,31 +107,103 @@ export function applyTransaction(
       return true;
     }
     case "validator_register": {
-      if (!tx.validatorId) {
-        return "validator_register requires validatorId";
+      // Validator ID is always the sender's own address.
+      const id = tx.from;
+      if (state.validators[id]) {
+        return "validator already registered";
       }
-      if (state.validators[tx.validatorId]) {
-        return "validator already exists";
+      if (state.pendingValidators.some((p) => p.id === id)) {
+        return "validator registration already pending";
       }
       if (sender.staked < config.minValidatorStake) {
         return "minimum stake not met";
       }
 
-      sender.balance -= config.baseFee;
+      sender.balance -= config.baseFee + tx.fee;
       sender.nonce += 1;
-      state.validators[tx.validatorId] = {
-        id: tx.validatorId,
-        owner: tx.from,
-        stake: sender.staked,
-        active: true,
-        missedBlocks: 0,
-        slashed: false,
-      };
+
+      if (config.epochLength > 0 && !options.genesisBootstrap) {
+        // Queue for activation at next epoch boundary.
+        state.pendingValidators.push({
+          id,
+          owner: tx.from,
+          registeredAtHeight: state.height,
+        });
+      } else {
+        // Activate immediately (genesis bootstrap or no epoch).
+        state.validators[id] = {
+          id,
+          owner: tx.from,
+          stake: sender.staked,
+          active: true,
+          missedBlocks: 0,
+          slashed: false,
+        };
+      }
       return true;
     }
     default:
       return "unsupported transaction type";
   }
+}
+
+/**
+ * At the end of each block, if this block's committed height will be an epoch
+ * boundary, promote the top pending validators into the active set.
+ *
+ * Validators are ranked by current staked balance (desc), breaking ties by
+ * registration height (asc — first-come, first-served). Candidates whose
+ * stake has fallen below `minValidatorStake` since registration are dropped.
+ */
+function activatePendingValidators(state: ProtocolState, config: ProtocolConfig): void {
+  if (config.epochLength === 0 || state.pendingValidators.length === 0) {
+    return;
+  }
+
+  // nextHeight is what state.height will become after updateBlockHead.
+  const nextHeight = state.height + 1;
+  if (nextHeight % config.epochLength !== 0) {
+    return;
+  }
+
+  const activeCount = Object.values(state.validators).filter((v) => v.active && !v.slashed).length;
+  const slots =
+    config.maxActiveValidators > 0
+      ? Math.max(0, config.maxActiveValidators - activeCount)
+      : state.pendingValidators.length;
+
+  // Sort: highest current stake first; equal stake → registered earlier first.
+  const sorted = [...state.pendingValidators].sort((a, b) => {
+    const stakeA = state.accounts[a.owner]?.staked ?? 0n;
+    const stakeB = state.accounts[b.owner]?.staked ?? 0n;
+    if (stakeB !== stakeA) return stakeB > stakeA ? 1 : -1;
+    return a.registeredAtHeight - b.registeredAtHeight;
+  });
+
+  const activated = new Set<string>();
+  let remaining = slots;
+
+  for (const pending of sorted) {
+    if (remaining <= 0) break;
+    const currentStake = state.accounts[pending.owner]?.staked ?? 0n;
+    if (currentStake < config.minValidatorStake) {
+      // Stake requirement no longer met — silently drop from queue.
+      activated.add(pending.id);
+      continue;
+    }
+    state.validators[pending.id] = {
+      id: pending.id,
+      owner: pending.owner,
+      stake: currentStake,
+      active: true,
+      missedBlocks: 0,
+      slashed: false,
+    };
+    activated.add(pending.id);
+    remaining -= 1;
+  }
+
+  state.pendingValidators = state.pendingValidators.filter((p) => !activated.has(p.id));
 }
 
 export function transactionSigningPayload(tx: Transaction): string {
@@ -130,6 +212,7 @@ export function transactionSigningPayload(tx: Transaction): string {
     from: tx.from,
     nonce: tx.nonce,
     amount: tx.amount.toString(),
+    fee: tx.fee.toString(),
     to: tx.to ?? null,
     validatorId: tx.validatorId ?? null,
   });

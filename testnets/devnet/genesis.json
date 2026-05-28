@@ -1,0 +1,68 @@
+{
+  "meta": {
+    "format": "quantix-genesis/v1",
+    "network": "devnet",
+    "createdAt": "2026-05-21T00:00:00Z"
+  },
+  "chain": {
+    "chainId": "quantix-devnet",
+    "name": "Quantix Devnet",
+    "addressPrefix": "qtx1",
+    "nativeDenom": "QTX",
+    "decimals": 18
+  },
+  "consensus": {
+    "algorithm": "qtx-bft",
+    "blockIntervalMs": 4000,
+    "maxTxPerBlock": 100,
+    "quorumRule": "floor(2n/3)+1",
+    "maxMissedBlocksBeforeSlash": 3,
+    "equivocationSlashPercent": 10
+  },
+  "protocolParams": {
+    "minValidatorStake": "32",
+    "unstakeCooldownBlocks": 20,
+    "baseFee": "1",
+    "epochLength": 0,
+    "maxActiveValidators": 0
+  },
+  "network": {
+    "rpc": {
+      "path": "/rpc",
+      "jsonrpc": "2.0"
+    },
+    "peerDiscovery": {
+      "mode": "static",
+      "bootstrapNodes": [
+        {
+          "id": "seednode",
+          "rpcEndpoint": "http://127.0.0.1:7330/rpc"
+        },
+        {
+          "id": "validator-alice",
+          "rpcEndpoint": "http://127.0.0.1:7331/rpc"
+        },
+        {
+          "id": "validator-bob",
+          "rpcEndpoint": "http://127.0.0.1:7332/rpc"
+        },
+        {
+          "id": "validator-carol",
+          "rpcEndpoint": "http://127.0.0.1:7333/rpc"
+        }
+      ]
+    },
+    "timeouts": {
+      "peerRpcMs": 2500,
+      "syncIntervalMs": 8000
+    }
+  },
+  "genesisState": {
+    "accounts": [
+      {
+        "address": "qtx170639fcac3fdc0b94d440b567437f3be21ecb1",
+        "balance": "5000000000000000000000000"
+      }
+    ]
+  }
+}

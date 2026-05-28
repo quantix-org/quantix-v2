@@ -10,13 +10,19 @@
   "scripts": {
     "build": "npm run -ws build",
     "dev:devnet": "tsx tools/devnet/run-3node.ts",
+    "dev:devnet4": "tsx tools/devnet/run-4node.ts",
     "dev:node": "npm run -w @quantix/node dev",
     "test": "tsx --test tests/**/*.test.ts",
     "typecheck": "npm run -ws typecheck",
-    "lint": "npm run -ws lint"
+    "lint": "npm run -ws lint",
+    "reset": "rm -rf testnets/devnet/data && mkdir -p testnets/devnet/data",
+    "explorer": "tsx tools/explorer/explorer.ts",
+    "explorer:devnet": "tsx tools/explorer/explorer.ts http://localhost:7331/rpc 8080",
+    "qtx": "tsx tools/wallet/qtx.ts",
+    "spam-tx": "tsx tools/wallet/spam-tx.ts"
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
+    "@types/node": "^24.12.4",
     "tsx": "^4.20.0",
     "typescript": "^5.8.0"
   }

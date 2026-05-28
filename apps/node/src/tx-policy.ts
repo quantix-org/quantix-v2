@@ -24,6 +24,7 @@ export function parseRpcTransactionStrict(input: unknown): Transaction {
   const from = mustBeAddress(candidate.from, "from");
   const nonce = mustBeNonce(candidate.nonce);
   const amount = mustBePositiveAmount(candidate.amount);
+  const fee = mustBeNonNegativeAmount(candidate.fee);
   const signerPublicKey = mustBeHex(candidate.signerPublicKey, "signerPublicKey");
   const signature = mustBeHex(candidate.signature, "signature");
 
@@ -32,6 +33,7 @@ export function parseRpcTransactionStrict(input: unknown): Transaction {
     from,
     nonce,
     amount,
+    fee,
     signerPublicKey,
     signature,
   };
@@ -112,6 +114,11 @@ export function enqueueValidatedTx(
   }
 
   mempool.push(tx);
+  // Sort: higher fee first; same-sender txs stay in nonce order
+  mempool.sort((a, b) => {
+    if (a.from === b.from) return a.nonce - b.nonce;
+    return b.fee > a.fee ? 1 : b.fee < a.fee ? -1 : 0;
+  });
   return {
     txHash: hashTx(tx),
   };
@@ -168,6 +175,17 @@ function mustBePositiveAmount(value: unknown): bigint {
     throw new RpcError(RpcErrorCode.INVALID_PARAMS, "field 'amount' must be > 0", {
       category: "schema",
       field: "amount",
+    });
+  }
+  return parsed;
+}
+
+function mustBeNonNegativeAmount(value: unknown): bigint {
+  const parsed = parseBigIntLike(value, "fee");
+  if (parsed < 0n) {
+    throw new RpcError(RpcErrorCode.INVALID_PARAMS, "field 'fee' must be >= 0", {
+      category: "schema",
+      field: "fee",
     });
   }
   return parsed;

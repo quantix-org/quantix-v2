@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@quantix/crypto": "0.1.0",
-    "@quantix/protocol": "0.1.0"
+    "@quantix/protocol": "0.1.0",
+    "classic-level": "^3.0.0"
   }
 }

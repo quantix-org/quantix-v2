@@ -52,8 +52,35 @@ export function runConsensusRound(
 
   const quorum = Math.floor((activeValidators.length * 2) / 3) + 1;
   const unavailable = new Set(options.unavailableValidatorIds ?? []);
-  const slashedValidators: string[] = [];
+  const participatingValidators = activeValidators.filter((validator) => !unavailable.has(validator.id));
+  const proposer = activeValidators[state.height % activeValidators.length];
+  const proposal: BlockProposal = {
+    height: state.height + 1,
+    parentHash: state.lastBlockHash,
+    proposerId: proposer.id,
+    txs,
+  };
 
+  const proposalHash = hashProposal(proposal);
+  const approvals = participatingValidators.length;
+
+  // Only count missed blocks / slashes when a block is actually committed.
+  // Counting on every failed retry attempt would slash validators after a
+  // brief network hiccup, leaving a single proposer forever.
+  if (approvals < quorum) {
+    return {
+      committed: false,
+      proposalHash,
+      proposerId: proposer.id,
+      approvals,
+      quorum,
+      unavailableValidators: [...unavailable],
+      slashedValidators: [],
+      reason: "quorum not reached",
+    };
+  }
+
+  const slashedValidators: string[] = [];
   for (const validator of activeValidators) {
     if (unavailable.has(validator.id)) {
       const slashed = markValidatorMissedBlock(
@@ -69,31 +96,6 @@ export function runConsensusRound(
       validator.missedBlocks = 0;
       state.validators[validator.id] = validator;
     }
-  }
-
-  const participatingValidators = activeValidators.filter((validator) => !unavailable.has(validator.id));
-  const proposer = activeValidators[state.height % activeValidators.length];
-  const proposal: BlockProposal = {
-    height: state.height + 1,
-    parentHash: state.lastBlockHash,
-    proposerId: proposer.id,
-    txs,
-  };
-
-  const proposalHash = hashProposal(proposal);
-  const approvals = participatingValidators.length;
-
-  if (approvals < quorum) {
-    return {
-      committed: false,
-      proposalHash,
-      proposerId: proposer.id,
-      approvals,
-      quorum,
-      unavailableValidators: [...unavailable],
-      slashedValidators,
-      reason: "quorum not reached",
-    };
   }
 
   const applyResult = applyBlock(state, txs, config, options);

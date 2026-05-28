@@ -5,4 +5,6 @@ export const DEFAULT_PROTOCOL_CONFIG: ProtocolConfig = {
   minValidatorStake: 32n,
   unstakeCooldownBlocks: 20,
   baseFee: 1n,
+  maxActiveValidators: 0,
+  epochLength: 0,
 };
