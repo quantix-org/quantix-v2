@@ -78,6 +78,7 @@ export class RpcError extends Error {
 // ─── Transaction builder params ──────────────────────────────────────────────
 
 interface BaseTxParams {
+  chainId: string;
   from: Address;
   nonce: number;
   amount: bigint;
@@ -109,6 +110,7 @@ function sign(tx: Omit<Transaction, "signature">, privateKey: string): Transacti
 /** Serialize a Transaction for JSON-RPC submission (bigint → string). */
 function serializeTx(tx: Transaction): Record<string, unknown> {
   const out: Record<string, unknown> = {
+    chainId: tx.chainId,
     type: tx.type,
     from: tx.from,
     nonce: tx.nonce,
@@ -160,6 +162,7 @@ async function rpcCall<T>(endpoint: string, method: string, params: unknown[]): 
 export function buildTransferTx(params: TransferParams): Transaction {
   return sign(
     {
+      chainId: params.chainId,
       type: "transfer",
       from: params.from,
       to: params.to,
@@ -180,6 +183,7 @@ export function buildTransferTx(params: TransferParams): Transaction {
 export function buildStakeTx(params: StakeParams): Transaction {
   return sign(
     {
+      chainId: params.chainId,
       type: "stake",
       from: params.from,
       nonce: params.nonce,
@@ -199,6 +203,7 @@ export function buildStakeTx(params: StakeParams): Transaction {
 export function buildUnstakeTx(params: UnstakeParams): Transaction {
   return sign(
     {
+      chainId: params.chainId,
       type: "unstake",
       from: params.from,
       nonce: params.nonce,
@@ -218,6 +223,7 @@ export function buildUnstakeTx(params: UnstakeParams): Transaction {
 export function buildValidatorRegisterTx(params: ValidatorRegisterParams): Transaction {
   return sign(
     {
+      chainId: params.chainId,
       type: "validator_register",
       from: params.from,
       validatorId: params.validatorId,

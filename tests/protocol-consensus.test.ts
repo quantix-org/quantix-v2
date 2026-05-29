@@ -30,6 +30,7 @@ test("rejects invalid signature", () => {
 
   const tx: Transaction = {
     type: "transfer",
+    chainId: DEFAULT_PROTOCOL_CONFIG.chainId,
     from: aliceAddress,
     to: bobAddress,
     nonce: 1,
@@ -165,12 +166,13 @@ test("slashes validator after repeated downtime", () => {
       : "invalid pq signature";
   };
 
-  const signTx = (input: Omit<Transaction, "signerPublicKey" | "signature" | "fee" | "timestamp"> & { fee?: bigint }): Transaction => {
+  const signTx = (input: Omit<Transaction, "signerPublicKey" | "signature" | "fee" | "timestamp" | "chainId"> & { fee?: bigint; chainId?: string }): Transaction => {
     const keyPair = keyByAddress.get(input.from);
     if (!keyPair) {
       throw new Error("missing keypair for signer");
     }
     const unsignedTx: Transaction = {
+      chainId: DEFAULT_PROTOCOL_CONFIG.chainId,
       fee: 0n,
       timestamp: Date.now(),
       ...input,
@@ -248,10 +250,10 @@ function makeSignHelpers(keyByAddress: Map<string, { publicKey: string; privateK
     return verifyPqSignature(tx.signerPublicKey, payload, tx.signature) ? true : "invalid pq signature";
   };
 
-  const signTx = (input: Omit<Transaction, "signerPublicKey" | "signature" | "fee" | "timestamp"> & { fee?: bigint }): Transaction => {
+  const signTx = (input: Omit<Transaction, "signerPublicKey" | "signature" | "fee" | "timestamp" | "chainId"> & { fee?: bigint; chainId?: string }): Transaction => {
     const keyPair = keyByAddress.get(input.from);
     if (!keyPair) throw new Error(`missing keypair for ${input.from}`);
-    const unsignedTx: Transaction = { fee: 0n, timestamp: Date.now(), ...input, signerPublicKey: keyPair.publicKey, signature: "" };
+    const unsignedTx: Transaction = { chainId: DEFAULT_PROTOCOL_CONFIG.chainId, fee: 0n, timestamp: Date.now(), ...input, signerPublicKey: keyPair.publicKey, signature: "" };
     return { ...unsignedTx, signature: signPqMessage(keyPair.privateKey, transactionSigningPayload(unsignedTx)) };
   };
 

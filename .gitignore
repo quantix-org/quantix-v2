@@ -9,4 +9,5 @@ ceklist
 testnets/*/data/
 apps/node/testnets/*/data/
 .vscode
-tools/explorer
+
+guide.md

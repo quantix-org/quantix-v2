@@ -21,10 +21,11 @@
  *   validators [--rpc <url>]                        Show all validators
  *
  * Options (global):
- *   --key  <file>   Path to wallet keyfile  (default: ./wallet.key.json)
- *   --rpc  <url>    Node RPC endpoint       (default: http://localhost:7331/rpc)
- *   --fee  <qtx>    Fee per transaction     (default: 0)
- *   --output <file> Where to write new key  (default: ./wallet.key.json)
+ *   --key      <file>   Path to wallet keyfile  (default: ./wallet.key.json)
+ *   --rpc      <url>    Node RPC endpoint       (default: http://localhost:7331/rpc)
+ *   --fee      <qtx>    Fee per transaction     (default: 0)
+ *   --output   <file>   Where to write new key  (default: ./wallet.key.json)
+ *   --chain-id <id>     Chain ID for replay protection (default: quantix-devnet)
  */
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
@@ -137,6 +138,7 @@ interface Args {
   key: string;
   output: string;
   fee: bigint;
+  chainId: string;
   raw: Record<string, string>;
 }
 
@@ -164,10 +166,11 @@ function parseArgs(argv: string[]): Args {
   return {
     command,
     positional: rest,
-    rpc:    raw["rpc"]    ?? DEFAULT_RPC,
-    key:    raw["key"]    ?? DEFAULT_KEY,
-    output: raw["output"] ?? raw["key"] ?? DEFAULT_KEY,
-    fee:    parseQtx(raw["fee"] ?? "0"),
+    rpc:     raw["rpc"]      ?? DEFAULT_RPC,
+    key:     raw["key"]      ?? DEFAULT_KEY,
+    output:  raw["output"]   ?? raw["key"] ?? DEFAULT_KEY,
+    fee:     parseQtx(raw["fee"] ?? "0"),
+    chainId: raw["chain-id"] ?? "quantix-devnet",
     raw,
   };
 }
@@ -306,6 +309,7 @@ async function cmdSend(args: Args) {
   try {
     const nonce = await getNextNonce(args.rpc, kf.address);
     const tx = buildTransferTx({
+      chainId:         args.chainId,
       from:            kf.address,
       to,
       nonce,
@@ -341,6 +345,7 @@ async function cmdStake(args: Args) {
   try {
     const nonce = await getNextNonce(args.rpc, kf.address);
     const tx = buildStakeTx({
+      chainId:         args.chainId,
       from:            kf.address,
       nonce,
       amount:          amtBig,
@@ -374,6 +379,7 @@ async function cmdUnstake(args: Args) {
   try {
     const nonce = await getNextNonce(args.rpc, kf.address);
     const tx = buildUnstakeTx({
+      chainId:         args.chainId,
       from:            kf.address,
       nonce,
       amount:          amtBig,
@@ -390,39 +396,64 @@ async function cmdUnstake(args: Args) {
   }
 }
 
-// qtx validator register <id> <amount> --key <file> [--fee <qtx>] [--rpc <url>]
+// qtx validator register <amount> --key <file> [--fee <qtx>] [--rpc <url>]
 async function cmdValidator(args: Args) {
   const sub = args.positional[0];
-  if (sub !== "register") die("Usage: qtx validator register <id> <amount> --key <file>");
+  if (sub !== "register") die("Usage: qtx validator register <amount> --key <file>");
 
-  const validatorId = args.positional[1];
-  const amount      = args.positional[2];
-  if (!validatorId || !amount) die("Usage: qtx validator register <id> <amount> --key <file>");
+  const amount = args.positional[1];
+  if (!amount) die("Usage: qtx validator register <amount> --key <file>");
 
   const kf     = loadKey(args.key);
   const amtBig = parseQtx(amount);
 
   header("Register Validator");
   row("From",         cyan(kf.address));
-  row("Validator ID", magenta(validatorId));
+  row("Validator ID", magenta(kf.address));
   row("Stake",        green(formatQtxFull(amtBig)));
   row("Fee",          formatQtx(args.fee));
   separator();
 
   try {
-    const nonce = await getNextNonce(args.rpc, kf.address);
-    const tx = buildValidatorRegisterTx({
+    // Read on-chain staked balance to determine how much more to stake.
+    // validator_register is rejected by the protocol if sender.staked < minValidatorStake,
+    // so we must submit a stake tx first when the account hasn't staked yet.
+    const { staked, nonce: chainNonce } = await getBalance(args.rpc, kf.address);
+    const additionalStake = amtBig > staked ? amtBig - staked : 0n;
+    let nonce = chainNonce + 1;
+
+    if (additionalStake > 0n) {
+      // Submit stake tx so that when validator_register is applied in the same block,
+      // sender.staked will satisfy minValidatorStake.
+      const stakeTx = buildStakeTx({
+        chainId:         args.chainId,
+        from:            kf.address,
+        nonce,
+        amount:          additionalStake,
+        fee:             args.fee,
+        signerPublicKey: kf.publicKey,
+        privateKey:      kf.privateKey,
+      });
+      const { txHash: stakeHash } = await submitTx(args.rpc, stakeTx);
+      row("Stake Tx",    yellow(stakeHash));
+      nonce++;
+    } else {
+      row("Already staked", green(formatQtxFull(staked) + " — skipping stake tx"));
+    }
+
+    const registerTx = buildValidatorRegisterTx({
+      chainId:         args.chainId,
       from:            kf.address,
-      validatorId,
+      validatorId:     kf.address,
       nonce,
-      amount:          amtBig,
+      amount:          1n,
       fee:             args.fee,
       signerPublicKey: kf.publicKey,
       privateKey:      kf.privateKey,
     });
-    const { txHash } = await submitTx(args.rpc, tx);
+    const { txHash } = await submitTx(args.rpc, registerTx);
     success("Validator registration submitted!");
-    row("Tx Hash", yellow(txHash));
+    row("Register Tx", yellow(txHash));
     console.log();
   } catch (e) {
     handleRpcError(e);
@@ -598,7 +629,7 @@ ${bold(cyan("  ⬡  Quantix Wallet CLI"))}  ${gray("— post-quantum blockchain 
     ${cyan("qtx send")}          ${cyan("<to> <amount>")} ${gray("--key <f> [options]")} Transfer QTX
     ${cyan("qtx stake")}         ${cyan("<amount>")}     ${gray("--key <f> [options]")} Stake QTX
     ${cyan("qtx unstake")}       ${cyan("<amount>")}     ${gray("--key <f> [options]")} Unstake QTX
-    ${cyan("qtx validator")}     ${cyan("register <id> <amount>")} ${gray("--key <f>")}  Register validator
+    ${cyan("qtx validator")}     ${cyan("register <amount>")}       ${gray("--key <f>")}  Register validator
 
   ${bold("Chain queries")}
     ${cyan("qtx block")}         ${cyan("<height|latest>")} ${gray("[--rpc <url>]")}    Block details + txs
@@ -630,7 +661,7 @@ ${bold(cyan("  ⬡  Quantix Wallet CLI"))}  ${gray("— post-quantum blockchain 
     tsx tools/wallet/qtx.ts stake 50 --key my-wallet.key.json --fee 0.001
 
     ${dim("# Register as validator (minimum stake: 32 QTX)")}
-    tsx tools/wallet/qtx.ts validator register my-node 32 --key my-wallet.key.json
+    tsx tools/wallet/qtx.ts validator register 32 --key my-wallet.key.json
 `);
 }
 

@@ -4,6 +4,8 @@ export type TxType = "transfer" | "stake" | "unstake" | "validator_register" | "
 
 export interface Transaction {
   type: TxType;
+  /** Chain ID — binds this transaction to a specific network and prevents replay attacks. */
+  chainId: string;
   from: Address;
   nonce: number;
   /** Unix millisecond timestamp — set by the sender, included in the signing payload. */

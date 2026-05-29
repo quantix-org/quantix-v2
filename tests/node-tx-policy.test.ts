@@ -8,6 +8,7 @@ import { RpcError, RpcErrorCode } from "../apps/node/src/rpc-errors.js";
 function createSignedTransfer(fromKey: { privateKey: string; publicKey: string }, from: string, to: string, nonce: number): Transaction {
   const unsignedTx: Transaction = {
     type: "transfer",
+    chainId: "quantix-devnet",
     from,
     to,
     nonce,
@@ -29,6 +30,7 @@ test("parseRpcTransactionStrict rejects invalid shape", () => {
     () =>
       parseRpcTransactionStrict({
         type: "transfer",
+        chainId: "quantix-devnet",
         from: "not-qtx",
         to: "qtx1dest",
         nonce: 1,
@@ -43,6 +45,7 @@ test("parseRpcTransactionStrict rejects invalid shape", () => {
     () =>
       parseRpcTransactionStrict({
         type: "stake",
+        chainId: "quantix-devnet",
         from: "qtx1abc",
         nonce: 1,
         amount: "0",
@@ -89,13 +92,13 @@ test("enqueueValidatedTx enforces sequential nonce and conflict prevention", () 
   };
 
   const tx1 = createSignedTransfer(aliceKeys, alice, bob, 1);
-  enqueueValidatedTx(state, mempool, tx1, verifySignature);
+  enqueueValidatedTx(state, mempool, tx1, verifySignature, "quantix-devnet");
   assert.equal(mempool.length, 1);
   assert.equal(getNextExpectedNonce(state, mempool, alice), 2);
 
   const duplicateNonce = createSignedTransfer(aliceKeys, alice, bob, 1);
   try {
-    enqueueValidatedTx(state, mempool, duplicateNonce, verifySignature);
+    enqueueValidatedTx(state, mempool, duplicateNonce, verifySignature, "quantix-devnet");
     assert.fail("expected conflict RpcError");
   } catch (error) {
     assert.ok(error instanceof RpcError);
@@ -104,7 +107,7 @@ test("enqueueValidatedTx enforces sequential nonce and conflict prevention", () 
 
   const gapNonce = createSignedTransfer(aliceKeys, alice, bob, 3);
   try {
-    enqueueValidatedTx(state, mempool, gapNonce, verifySignature);
+    enqueueValidatedTx(state, mempool, gapNonce, verifySignature, "quantix-devnet");
     assert.fail("expected sequence RpcError");
   } catch (error) {
     assert.ok(error instanceof RpcError);
@@ -112,6 +115,6 @@ test("enqueueValidatedTx enforces sequential nonce and conflict prevention", () 
   }
 
   const tx2 = createSignedTransfer(aliceKeys, alice, bob, 2);
-  enqueueValidatedTx(state, mempool, tx2, verifySignature);
+  enqueueValidatedTx(state, mempool, tx2, verifySignature, "quantix-devnet");
   assert.equal(mempool.length, 2);
 });

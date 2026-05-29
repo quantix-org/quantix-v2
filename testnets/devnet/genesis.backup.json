@@ -22,7 +22,7 @@
     "inactivityBurnPercent": 50
   },
   "protocolParams": {
-    "minValidatorStake": "32000000000000000000",
+    "minValidatorStake": "32",
     "unstakeCooldownBlocks": 20,
     "baseFee": "1",
     "epochLength": 0,
@@ -39,6 +39,18 @@
         {
           "id": "seednode",
           "rpcEndpoint": "http://127.0.0.1:7330/rpc"
+        },
+        {
+          "id": "validator-alice",
+          "rpcEndpoint": "http://127.0.0.1:7331/rpc"
+        },
+        {
+          "id": "validator-bob",
+          "rpcEndpoint": "http://127.0.0.1:7332/rpc"
+        },
+        {
+          "id": "validator-carol",
+          "rpcEndpoint": "http://127.0.0.1:7333/rpc"
         }
       ]
     },
@@ -79,22 +91,6 @@
       },
       {
         "address": "qtx1e8e182f230b5a40d96841678c340fecbf1a3bf",
-        "balance": "5000000000000000000000000"
-      },
-      {
-        "address": "qtx1992af794f83c88552d8a703ddfa64aa45cd48e",
-        "balance": "5000000000000000000000000"
-      },
-      {
-        "address": "qtx126acd5e923285836493302af8c98444a93750c",
-        "balance": "5000000000000000000000000"
-      },
-      {
-        "address": "qtx185e6b615e713f63344d201ce6a4444a6ec997e",
-        "balance": "5000000000000000000000000"
-      },
-      {
-        "address": "qtx1db70840f08a362219dd503249e0502a1c71a26",
         "balance": "5000000000000000000000000"
       }
     ]

@@ -231,6 +231,7 @@ function activatePendingValidators(state: ProtocolState, config: ProtocolConfig)
 
 export function transactionSigningPayload(tx: Transaction): string {
   return JSON.stringify({
+    chainId: tx.chainId,
     type: tx.type,
     from: tx.from,
     nonce: tx.nonce,

@@ -163,12 +163,18 @@ const rpcPort = Number(process.env.QTX_RPC_PORT ?? String(defaultRpcPort));
 if (rpcPort === 0) {
   throw new Error("External validator must set QTX_RPC_PORT env var.");
 }
+// Map our own address → endpoint so other nodes resolve us by address (not just node ID).
+// Bootstrap nodes (e.g. "seednode") are keyed by string ID in genesis; active validators
+// are keyed by address in state.validators. Adding the address entry here lets external
+// validators find us via peerEndpointById.get(ourAddress) in produceDistributedBlock.
+peerEndpointById.set(selfAddress, `http://127.0.0.1:${rpcPort}/rpc`);
 
 // Proposer skip: counts block intervals where state.height didn't advance.
 // When the scheduled proposer is offline, the slot rotates forward so the next
 // online validator steps in. Resets to 0 each time a new block is committed.
 let consecutiveStalls = 0;
 let lastSeenHeightAtBlockTick = -1;
+let shuttingDown = false;
 
 (async () => {
   await store.open();
@@ -189,12 +195,14 @@ let lastSeenHeightAtBlockTick = -1;
     }
     lastSeenHeightAtBlockTick = state.height;
 
+    if (shuttingDown) return;
     try {
       const r = await produceDistributedBlock();
       if (r.committed) {
         console.log(
           `${ts()} [${nodeId}] ✓ block #${r.height}  proposer=${r.proposer}  txs=${r.txCount}  votes=${r.votesFor}/${r.totalValidators}  ${r.elapsedMs}ms`,
         );
+        checkSeednodeHandoff();
       } else if (r.reason !== "not proposer for current height") {
         console.log(
           `${ts()} [${nodeId}] ✗ block #${r.height + 1}  ${r.reason ?? "failed"}  votes=${r.votesFor ?? 0}/${r.totalValidators ?? "?"}`,
@@ -207,14 +215,31 @@ let lastSeenHeightAtBlockTick = -1;
 }, blockIntervalMs);
 
 setInterval(() => {
-  syncFromPeers().catch((err: unknown) => {
-    console.warn(`${ts()} [${nodeId}] sync error:`, err);
-  });
-  // Validator nodes periodically retry staking/registration until they become active.
-  if (!isSeedNode) void autoRegisterAsValidator();
+  // Run sync first so autoRegisterAsValidator sees up-to-date account/staked state.
+  // If both run concurrently, autoRegisterAsValidator reads pre-sync stale state and
+  // submits duplicate stake txs every cycle instead of advancing to the register step.
+  void (async () => {
+    try {
+      await syncFromPeers();
+    } catch (err: unknown) {
+      console.warn(`${ts()} [${nodeId}] sync error:`, err);
+    }
+    if (!isSeedNode) await autoRegisterAsValidator();
+  })();
 }, syncIntervalMs);
 
 const server = createServer(async (req, res) => {
+  // CORS — allow browser wallets and explorers to call the RPC endpoint
+  res.setHeader("access-control-allow-origin", "*");
+  res.setHeader("access-control-allow-methods", "POST, OPTIONS");
+  res.setHeader("access-control-allow-headers", "content-type");
+
+  if (req.method === "OPTIONS") {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
   if (req.method !== "POST" || req.url !== "/rpc") {
     sendJson(res, 404, { error: "not found" });
     return;
@@ -303,6 +328,14 @@ function applyBootstrapOnce(): void {
 async function autoRegisterAsValidator(): Promise<void> {
   if (isSeedNode) return;
 
+  // Announce our RPC endpoint to all known peers every cycle so they can contact us for consensus.
+  // This ensures the seednode re-discovers us even after a restart.
+  const selfEndpoint = `http://127.0.0.1:${rpcPort}/rpc`;
+  for (const peer of peerConfigs) {
+    const endpoint = peerEndpointById.get(peer.id) ?? `http://127.0.0.1:${peer.rpcPort}/rpc`;
+    rpcCall(endpoint, "qtx_announcePeer", [selfAddress, selfEndpoint], peerRpcMs).catch(() => {});
+  }
+
   // Already an active or pending validator — nothing to do.
   if (state.validators[selfAddress] || state.pendingValidators.some((p) => p.id === selfAddress)) {
     return;
@@ -380,6 +413,7 @@ function signTxFor(
   const signerPublicKey = signer?.publicKey ?? selfKeys.publicKey;
   const txWithoutSig: Transaction = {
     ...input,
+    chainId: protocolConfig.chainId,
     fee: input.fee ?? 0n,
     timestamp: Date.now(),
     signerPublicKey,
@@ -395,7 +429,46 @@ function signTxFor(
 }
 
 function enqueueSignedTx(tx: Transaction): { txHash: string } {
-  return enqueueValidatedTx(state, mempool, tx, verifier);
+  return enqueueValidatedTx(state, mempool, tx, verifier, protocolConfig.chainId);
+}
+
+/**
+ * Remove txs from the mempool whose nonce is already committed on-chain.
+ * Called after block commits and after state syncs to prevent nonce-gap buildup.
+ */
+function pruneStaleMempool(): void {
+  for (let i = mempool.length - 1; i >= 0; i--) {
+    const tx = mempool[i];
+    const chainNonce = state.accounts[tx.from]?.nonce ?? 0;
+    if (tx.nonce <= chainNonce) {
+      mempool.splice(i, 1);
+    }
+  }
+}
+
+/**
+ * After each committed block, if this is the seednode and at least 4 external
+ * validators are both active on-chain AND have announced their RPC endpoint,
+ * initiate a graceful handoff: stop proposing and exit after 5 s so the
+ * external validators take over block production.
+ */
+function checkSeednodeHandoff(): void {
+  if (!isSeedNode || shuttingDown) return;
+  const externalOnline = getActiveValidatorIds().filter(
+    (id) => id !== selfAddress && peerEndpointById.has(id),
+  );
+  if (externalOnline.length >= 4) {
+    shuttingDown = true;
+    const preview = externalOnline.map((id) => id.slice(0, 16)).join(", ");
+    console.log(
+      `${ts()} [${nodeId}] 🎉 handoff: ${externalOnline.length} external validators online — seednode exiting in 5 s`,
+    );
+    console.log(`${ts()} [${nodeId}]    validators: ${preview}`);
+    setTimeout(() => {
+      console.log(`${ts()} [${nodeId}] 👋 seednode exit — chain handed off to validators`);
+      process.exit(0);
+    }, 5000);
+  }
 }
 
 function getActiveValidatorIds(): string[] {
@@ -440,7 +513,8 @@ async function produceDistributedBlock(): Promise<{
   // while awaiting peer votes. Committed txs are removed by hash after applyBlock.
   const batch = mempool.slice(0, genesis.consensus.maxTxPerBlock);
   const stallSuffix = consecutiveStalls > 0 ? `  skip=${consecutiveStalls}` : "";
-  console.log(`${ts()} [${nodeId}] → proposing block #${state.height + 1}  mempool=${batch.length} txs  asking ${peerConfigs.length} peers${stallSuffix}`);
+  const expectedPeerCount = Math.max(0, getActiveValidatorIds().length - 1);
+  console.log(`${ts()} [${nodeId}] → proposing block #${state.height + 1}  mempool=${batch.length} txs  asking ${expectedPeerCount} peers${stallSuffix}`);
   const proposal: Proposal = {
     height: state.height + 1,
     parentHash: state.lastBlockHash,
@@ -456,11 +530,18 @@ async function produceDistributedBlock(): Promise<{
   const votes: Vote[] = [selfVote];
   const unavailable: string[] = [];
 
+  // Consult all active validators (by on-chain address) that have a known RPC endpoint.
+  // peerEndpointById is populated at startup (bootstrap nodes) and grows via qtx_announcePeer.
+  const peersToConsult = getActiveValidatorIds()
+    .filter((id) => id !== selfAddress)
+    .map((id) => ({ id, endpoint: peerEndpointById.get(id) }))
+    .filter((v): v is { id: string; endpoint: string } => v.endpoint !== undefined);
+
   await Promise.all(
-    peerConfigs.map(async (peer) => {
+    peersToConsult.map(async ({ id: validatorId, endpoint }) => {
       try {
         const peerVote = await rpcCall<Vote | null>(
-          peerEndpointById.get(peer.id) ?? `http://127.0.0.1:${peer.rpcPort}/rpc`,
+          endpoint,
           "qtx_consensusPrepare",
           [serializeForJson(proposal)],
           peerRpcMs,
@@ -468,10 +549,10 @@ async function produceDistributedBlock(): Promise<{
         if (peerVote && verifyVote(peerVote)) {
           votes.push(peerVote);
         } else {
-          unavailable.push(addressByValidatorId.get(peer.id) ?? peer.id);
+          unavailable.push(validatorId);
         }
       } catch {
-        unavailable.push(addressByValidatorId.get(peer.id) ?? peer.id);
+        unavailable.push(validatorId);
       }
     }),
   );
@@ -502,7 +583,7 @@ async function produceDistributedBlock(): Promise<{
       txCount: 0,
       proposer: nodeId,
       votesFor: votes.length,
-      totalValidators: peerConfigs.length + 1,
+      totalValidators: getActiveValidatorIds().length,
       elapsedMs: Date.now() - t0,
       reason: round.reason ?? "quorum not reached",
     };
@@ -518,6 +599,8 @@ async function produceDistributedBlock(): Promise<{
   for (let j = mempool.length - 1; j >= 0; j--) {
     if (batchSet.has(mempool[j])) mempool.splice(j, 1);
   }
+  // Also prune any remaining txs whose nonces are now stale after the committed block.
+  pruneStaleMempool();
 
   blocks.push({
     height: state.height,
@@ -532,10 +615,10 @@ async function produceDistributedBlock(): Promise<{
   persistNodeData();
 
   await Promise.all(
-    peerConfigs.map(async (peer) => {
+    peersToConsult.map(async ({ endpoint }) => {
       try {
         await rpcCall(
-          peerEndpointById.get(peer.id) ?? `http://127.0.0.1:${peer.rpcPort}/rpc`,
+          endpoint,
           "qtx_consensusCommit",
           [proposal.hash, votes],
           peerRpcMs,
@@ -553,7 +636,7 @@ async function produceDistributedBlock(): Promise<{
     txCount: round.applyResult?.accepted.length ?? 0,
     proposer: nodeId,
     votesFor: votes.length,
-    totalValidators: peerConfigs.length + 1,
+    totalValidators: getActiveValidatorIds().length,
     elapsedMs: Date.now() - t0,
   };
 }
@@ -581,28 +664,28 @@ interface RpcStateSnapshot {
 }
 
 async function syncFromPeers(): Promise<void> {
+  const syncPeers = Array.from(peerEndpointById.entries()).filter(([id]) => id !== selfAddress);
   const heads = await Promise.all(
-    peerConfigs.map(async (peer) => {
+    syncPeers.map(async ([peerId, endpoint]) => {
       try {
         const latest = await rpcCall<{ height: number; hash: string }>(
-          peerEndpointById.get(peer.id) ?? `http://127.0.0.1:${peer.rpcPort}/rpc`,
+          endpoint,
           "qtx_getLatestBlock",
           [],
           peerRpcMs,
         );
-        return {
-          peer,
-          latest,
-        };
+        return { peerId, endpoint, latest };
       } catch {
+        // Prune dead peers — they re-announce themselves on restart.
+        peerEndpointById.delete(peerId);
         return null;
       }
     }),
   );
 
   const onlineCount = heads.filter((item) => item !== null).length;
-  if (onlineCount < peerConfigs.length) {
-    console.warn(`${ts()} [${nodeId}] ~ sync: ${onlineCount}/${peerConfigs.length} peers online`);
+  if (onlineCount < syncPeers.length) {
+    console.warn(`${ts()} [${nodeId}] ~ sync: ${onlineCount}/${syncPeers.length} peers online`);
   }
 
   const highest = heads
@@ -614,7 +697,7 @@ async function syncFromPeers(): Promise<void> {
   }
 
   const snapshot = await rpcCall<RpcStateSnapshot>(
-    peerEndpointById.get(highest.peer.id) ?? `http://127.0.0.1:${highest.peer.rpcPort}/rpc`,
+    highest.endpoint,
     "qtx_getState",
     [],
     peerRpcMs,
@@ -622,8 +705,10 @@ async function syncFromPeers(): Promise<void> {
 
   const prevHeight = state.height;
   importStateSnapshot(snapshot);
+  pruneStaleMempool();
   persistNodeData();
-  console.log(`${ts()} [${nodeId}] ↑ synced from ${highest.peer.id}  height=${state.height} (was ${prevHeight})`);
+  console.log(`${ts()} [${nodeId}] ↑ synced from ${highest.peerId}  height=${state.height} (was ${prevHeight})`);
+  checkSeednodeHandoff();
 }
 
 function importStateSnapshot(snapshot: RpcStateSnapshot): void {
@@ -718,9 +803,13 @@ async function handleRpcRequest(method: string, params: unknown[]): Promise<unkn
     }
     case "qtx_getBlockHead":
     case "qtx_getLatestBlock": {
+      const latestStored = await store.getBlock(state.height);
       return {
         height: state.height,
         hash: state.lastBlockHash,
+        timestamp: latestStored?.timestamp ?? Date.now(),
+        txCount: latestStored?.txs?.length ?? 0,
+        proposer: latestStored?.proposer ?? "",
       };
     }
     case "qtx_getBlock": {
@@ -815,7 +904,7 @@ async function handleRpcRequest(method: string, params: unknown[]): Promise<unkn
         endpoint: peerEndpointById.get(peer.id) ?? `http://127.0.0.1:${peer.rpcPort}/rpc`,
       }));
       for (const [id, endpoint] of peerEndpointById) {
-        if (id !== nodeId && !peers.find((p) => p.id === id)) {
+        if (id !== selfAddress && !peers.find((p) => p.id === id)) {
           peers.push({ id, endpoint });
         }
       }
@@ -964,6 +1053,36 @@ async function handleRpcRequest(method: string, params: unknown[]): Promise<unkn
     case "qtx_getState": {
       return buildStateSnapshot();
     }
+    case "qtx_announcePeer": {
+      const peerId = String(params[0] ?? "");
+      const peerEndpoint = String(params[1] ?? "");
+      if (peerId && peerEndpoint && peerId !== selfAddress) {
+        const isNew = !peerEndpointById.has(peerId);
+        if (isNew) {
+          console.log(`${ts()} [${nodeId}] ↔ peer registered: ${peerId}  ${peerEndpoint}`);
+          // Announce ourselves back to the newcomer so they immediately learn our address
+          // (they may only have us in peerEndpointById by node ID, not address).
+          const selfEndpoint = `http://127.0.0.1:${rpcPort}/rpc`;
+          rpcCall(peerEndpoint, "qtx_announcePeer", [selfAddress, selfEndpoint], peerRpcMs).catch(() => {});
+          // Forward the new peer to all existing known peers so they don't wait 8 s for
+          // their next discoverPeers cycle to learn about the newcomer.
+          for (const [existingId, existingEndpoint] of peerEndpointById) {
+            if (existingId !== peerId && existingId !== selfAddress) {
+              rpcCall(existingEndpoint, "qtx_announcePeer", [peerId, peerEndpoint], peerRpcMs).catch(() => {});
+            }
+          }
+        }
+        // Remove any existing entry that shares this endpoint (e.g., genesis string
+        // key "seednode" replaced by the node's real address on first announce-back).
+        for (const [existingId, existingEp] of peerEndpointById) {
+          if (existingEp === peerEndpoint && existingId !== peerId) {
+            peerEndpointById.delete(existingId);
+          }
+        }
+        peerEndpointById.set(peerId, peerEndpoint);
+      }
+      return { acknowledged: true };
+    }
     default:
       throw new RpcError(RpcErrorCode.METHOD_NOT_FOUND, `unsupported method: ${method}`, { method });
   }
@@ -972,9 +1091,9 @@ async function handleRpcRequest(method: string, params: unknown[]): Promise<unkn
 async function gossipTransaction(tx: Transaction, txHash: string): Promise<void> {
   const serialized = serializeForJson(tx) as unknown;
   let gossiped = 0;
+  const gossipPeers = Array.from(peerEndpointById.entries()).filter(([id]) => id !== selfAddress);
   await Promise.all(
-    peerConfigs.map(async (peer) => {
-      const endpoint = peerEndpointById.get(peer.id) ?? `http://127.0.0.1:${peer.rpcPort}/rpc`;
+    gossipPeers.map(async ([, endpoint]) => {
       try {
         await rpcCall(endpoint, "qtx_receivePeerTransaction", [serialized, txHash], peerRpcMs);
         gossiped++;
@@ -983,15 +1102,15 @@ async function gossipTransaction(tx: Transaction, txHash: string): Promise<void>
       }
     }),
   );
-  if (peerConfigs.length > 0) {
-    console.log(`${ts()} [${nodeId}] → gossiped ${txHash.slice(0, 12)} to ${gossiped}/${peerConfigs.length} peers`);
+  if (gossipPeers.length > 0) {
+    console.log(`${ts()} [${nodeId}] → gossiped ${txHash.slice(0, 12)} to ${gossiped}/${gossipPeers.length} peers`);
   }
 }
 
 async function discoverPeers(): Promise<void> {
+  const knownPeers = Array.from(peerEndpointById.entries()).filter(([id]) => id !== selfAddress);
   await Promise.all(
-    peerConfigs.map(async (peer) => {
-      const endpoint = peerEndpointById.get(peer.id) ?? `http://127.0.0.1:${peer.rpcPort}/rpc`;
+    knownPeers.map(async ([peerId, endpoint]) => {
       try {
         const discovered = await rpcCall<Array<{ id: string; endpoint: string }>>(
           endpoint,
@@ -1000,13 +1119,13 @@ async function discoverPeers(): Promise<void> {
           peerRpcMs,
         );
         for (const p of discovered) {
-          if (p.id !== nodeId && !peerEndpointById.has(p.id)) {
+          if (p.id !== selfAddress && !peerEndpointById.has(p.id)) {
             peerEndpointById.set(p.id, p.endpoint);
             console.log(`${ts()} [${nodeId}] ↔ peer discovered: ${p.id}  ${p.endpoint}`);
           }
         }
       } catch {
-        console.warn(`${ts()} [${nodeId}] ↔ peer unreachable: ${peer.id}  ${endpoint}`);
+        console.warn(`${ts()} [${nodeId}] ↔ peer unreachable: ${peerId}  ${endpoint}`);
       }
     }),
   );
@@ -1036,6 +1155,8 @@ function sendJson(res: import("node:http").ServerResponse, status: number, paylo
   res.statusCode = status;
   res.setHeader("content-type", "application/json");
   res.end(JSON.stringify(serializeForJson(payload)));
+  // Note: access-control-allow-origin is set at the top of the request handler
+  // before sendJson is called, so it's always present.
 }
 
 function serializeForJson<T>(value: T): T {

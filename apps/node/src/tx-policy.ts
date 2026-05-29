@@ -22,6 +22,7 @@ export function parseRpcTransactionStrict(input: unknown): Transaction {
   const candidate = input as Record<string, unknown>;
 
   const type = mustBeTxType(candidate.type);
+  const chainId = mustBeNonEmptyString(candidate.chainId, "chainId");
   const from = mustBeAddress(candidate.from, "from");
   const nonce = mustBeNonce(candidate.nonce);
   const timestamp =
@@ -35,6 +36,7 @@ export function parseRpcTransactionStrict(input: unknown): Transaction {
 
   const tx: Transaction = {
     type,
+    chainId,
     from,
     nonce,
     timestamp,
@@ -74,9 +76,17 @@ export function enqueueValidatedTx(
   mempool: Transaction[],
   tx: Transaction,
   verifySignature: VerifySignature,
+  expectedChainId: string,
 ): { txHash: string } {
   const payload = transactionSigningPayload(tx);
   const verifyResult = verifySignature(tx, payload);
+  if (tx.chainId !== expectedChainId) {
+    throw new RpcError(RpcErrorCode.INVALID_PARAMS, `transaction rejected: chainId '${tx.chainId}' does not match network '${expectedChainId}'`, {
+      category: "chainId",
+      from: tx.from,
+      nonce: tx.nonce,
+    });
+  }
   if (verifyResult !== true) {
     throw new RpcError(RpcErrorCode.SIGNATURE_INVALID, `transaction rejected: ${verifyResult}`, {
       category: "signature",

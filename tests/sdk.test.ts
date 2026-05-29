@@ -59,6 +59,7 @@ test("buildTransferTx produces a correctly shaped transaction", () => {
   const recipient = makeAccount();
 
   const tx = buildTransferTx({
+    chainId: "quantix-devnet",
     from: sender.address,
     to: recipient.address,
     amount: 100n,
@@ -82,6 +83,7 @@ test("buildTransferTx defaults fee to 0n when omitted", () => {
   const recipient = makeAccount();
 
   const tx = buildTransferTx({
+    chainId: "quantix-devnet",
     from: sender.address,
     to: recipient.address,
     amount: 50n,
@@ -98,6 +100,7 @@ test("buildTransferTx signature is valid", () => {
   const recipient = makeAccount();
 
   const tx = buildTransferTx({
+    chainId: "quantix-devnet",
     from: sender.address,
     to: recipient.address,
     amount: 100n,
@@ -117,6 +120,7 @@ test("buildStakeTx produces a stake transaction with valid signature", () => {
   const acc = makeAccount();
 
   const tx = buildStakeTx({
+    chainId: "quantix-devnet",
     from: acc.address,
     amount: 1000n,
     nonce: 1,
@@ -138,6 +142,7 @@ test("buildUnstakeTx produces an unstake transaction with valid signature", () =
   const acc = makeAccount();
 
   const tx = buildUnstakeTx({
+    chainId: "quantix-devnet",
     from: acc.address,
     amount: 500n,
     nonce: 2,
@@ -156,6 +161,7 @@ test("buildValidatorRegisterTx produces a validator_register tx with valid signa
   const acc = makeAccount();
 
   const tx = buildValidatorRegisterTx({
+    chainId: "quantix-devnet",
     from: acc.address,
     validatorId: "validator-99",
     amount: 5000n,
@@ -180,6 +186,7 @@ test("buildValidatorRegisterTx produces a validator_register tx with valid signa
 
 function serializeTxForWire(tx: import("@quantix/protocol").Transaction): Record<string, unknown> {
   const out: Record<string, unknown> = {
+    chainId: tx.chainId,
     type: tx.type,
     from: tx.from,
     nonce: tx.nonce,
@@ -198,6 +205,7 @@ test("transfer tx wire format parses successfully on the node side", () => {
   const recipient = makeAccount();
 
   const tx = buildTransferTx({
+    chainId: "quantix-devnet",
     from: sender.address,
     to: recipient.address,
     amount: 200n,
@@ -220,6 +228,7 @@ test("validator_register tx wire format parses successfully on the node side", (
   const acc = makeAccount();
 
   const tx = buildValidatorRegisterTx({
+    chainId: "quantix-devnet",
     from: acc.address,
     validatorId: "val-abc",
     amount: 1000n,

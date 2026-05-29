@@ -38,8 +38,8 @@ export function loadDevnetConfig(configPath: string): DevnetConfig {
     throw new Error("config: seedNode must have id, seedHex, and rpcPort");
   }
 
-  if (!raw.validators || raw.validators.length < 1) {
-    throw new Error("config: must define at least 1 validator");
+  if (!raw.validators) {
+    throw new Error("config: 'validators' array must be present (can be empty)");
   }
 
   for (const validator of raw.validators) {
