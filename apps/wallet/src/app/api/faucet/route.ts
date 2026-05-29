@@ -41,7 +41,24 @@ function transactionSigningPayload(tx: {
 function getFunderWalletFromEnv(): WalletFile {
   const raw = process.env.FAUCET_FUNDER_WALLET_JSON?.trim();
   if (!raw) {
-    throw new Error("Missing FAUCET_FUNDER_WALLET_JSON environment variable.");
+    const address = process.env.FAUCET_FUNDER_ADDRESS?.trim();
+    const publicKey = process.env.FAUCET_FUNDER_PUBLIC_KEY?.trim();
+    const privateKey = process.env.FAUCET_FUNDER_PRIVATE_KEY?.trim();
+
+    if (!address || !publicKey || !privateKey) {
+      throw new Error(
+        "Missing faucet funder env config. Set FAUCET_FUNDER_WALLET_JSON or split vars FAUCET_FUNDER_ADDRESS, FAUCET_FUNDER_PUBLIC_KEY, FAUCET_FUNDER_PRIVATE_KEY.",
+      );
+    }
+
+    return parseWalletFile({
+      version: process.env.FAUCET_FUNDER_VERSION?.trim() || "quantix-key/v1",
+      address,
+      publicKey,
+      privateKey,
+      seed: process.env.FAUCET_FUNDER_SEED?.trim() || undefined,
+      createdAt: process.env.FAUCET_FUNDER_CREATED_AT?.trim() || new Date().toISOString(),
+    });
   }
 
   let parsed: unknown;

@@ -12,3 +12,4 @@ apps/node/testnets/*/data/
 apps/wallet/.env.local
 guide.md
 apps/wallet/.next
+apps/wallet/.env.example
