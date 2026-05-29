@@ -47,8 +47,15 @@ function getFunderWalletFromEnv(): WalletFile {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
+
+    // Support values stored as an escaped JSON string in env providers.
+    if (typeof parsed === "string") {
+      parsed = JSON.parse(parsed);
+    }
   } catch {
-    throw new Error("FAUCET_FUNDER_WALLET_JSON is not valid JSON.");
+    throw new Error(
+      "FAUCET_FUNDER_WALLET_JSON is not valid JSON. Provide a JSON object or an escaped JSON string.",
+    );
   }
 
   return parseWalletFile(parsed);

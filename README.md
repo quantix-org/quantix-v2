@@ -498,6 +498,35 @@ Submit a signed transaction. Returns `{ txHash }` on success.
 | `QTX_GENESIS_PATH` | `testnets/devnet/genesis.json` | Path to genesis JSON |
 | `QTX_BLOCK_INTERVAL_MS` | from genesis | Override block production interval in milliseconds |
 
+### Wallet App (`apps/wallet`) env vars
+
+| Variable | Default | Description |
+|---|---|---|
+| `NEXT_PUBLIC_RPC_URL` | `http://localhost:7330/rpc` | RPC URL used by wallet UI and API proxy |
+| `NODE_RPC_URL` | falls back to `NEXT_PUBLIC_RPC_URL` | Optional server-side RPC URL override for API routes |
+| `QTX_CHAIN_ID` | `quantix-devnet` | Chain ID used when signing faucet transfer transactions |
+| `FAUCET_FUNDER_WALLET_JSON` | — | Full funder wallet JSON used by `/api/faucet` to sign one-time 10 QTX funding |
+
+`FAUCET_FUNDER_WALLET_JSON` accepts both formats below:
+
+1. Raw JSON object string (recommended for Vercel env UI):
+
+```text
+{"version":"quantix-key/v1","address":"qtx1...","publicKey":"...","privateKey":"...","seed":"...","createdAt":"..."}
+```
+
+2. Escaped JSON string (double-encoded), often used in `.env.local` files:
+
+```text
+"{\"version\":\"quantix-key/v1\",\"address\":\"qtx1...\",\"publicKey\":\"...\",\"privateKey\":\"...\",\"seed\":\"...\",\"createdAt\":\"...\"}"
+```
+
+Security notes:
+
+- Keep faucet funder keys only in deployment env settings.
+- Never commit real wallet JSON to git.
+- Restrict faucet use to low-value dev/test funds.
+
 ---
 
 ## SDK Usage
