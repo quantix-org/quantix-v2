@@ -17,7 +17,7 @@
     "lint": "npm run -ws lint",
     "reset": "rm -rf testnets/devnet/data && mkdir -p testnets/devnet/data",
     "explorer": "tsx tools/explorer/explorer.ts",
-    "explorer:devnet": "tsx tools/explorer/explorer.ts http://localhost:7332/rpc 8989",
+    "explorer:devnet": "tsx tools/explorer/explorer.ts http://164.68.118.17:7332/rpc 8989",
     "qtx": "tsx tools/wallet/qtx.ts",
     "spam-tx": "tsx tools/wallet/spam-tx.ts",
     "wallet": "npm run -w @quantix/wallet dev",

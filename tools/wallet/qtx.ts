@@ -22,7 +22,7 @@
  *
  * Options (global):
  *   --key      <file>   Path to wallet keyfile  (default: ./wallet.key.json)
- *   --rpc      <url>    Node RPC endpoint       (default: http://localhost:7331/rpc)
+ *   --rpc      <url>    Node RPC endpoint       (default: http://164.68.118.17:7331/rpc)
  *   --fee      <qtx>    Fee per transaction     (default: 0)
  *   --output   <file>   Where to write new key  (default: ./wallet.key.json)
  *   --chain-id <id>     Chain ID for replay protection (default: quantix-devnet)
@@ -143,7 +143,7 @@ interface Args {
 }
 
 function parseArgs(argv: string[]): Args {
-  const DEFAULT_RPC = "http://localhost:7331/rpc";
+  const DEFAULT_RPC = "http://164.68.118.17:7331/rpc";
   const DEFAULT_KEY = "./wallet.key.json";
 
   const positional: string[] = [];
@@ -640,7 +640,7 @@ ${bold(cyan("  ⬡  Quantix Wallet CLI"))}  ${gray("— post-quantum blockchain 
 
   ${bold("Options")}
     ${yellow("--key")}   ${gray("<file>")}   Wallet keyfile           ${dim("(default: ./wallet.key.json)")}
-    ${yellow("--rpc")}   ${gray("<url>")}    Node RPC endpoint        ${dim("(default: http://localhost:7331/rpc)")}
+    ${yellow("--rpc")}   ${gray("<url>")}    Node RPC endpoint        ${dim("(default: http://164.68.118.17:7331/rpc)")}
     ${yellow("--fee")}   ${gray("<qtx>")}    Transaction fee in QTX   ${dim("(default: 0)")}
     ${yellow("--output")} ${gray("<file>")}  Output path for new key  ${dim("(default: ./wallet.key.json)")}
 
@@ -652,7 +652,7 @@ ${bold(cyan("  ⬡  Quantix Wallet CLI"))}  ${gray("— post-quantum blockchain 
     tsx tools/wallet/qtx.ts import aaaa...64hex --output my-wallet.key.json
 
     ${dim("# Check balance on devnet")}
-    tsx tools/wallet/qtx.ts balance qtx1abc... --rpc http://localhost:7331/rpc
+    tsx tools/wallet/qtx.ts balance qtx1abc... --rpc http://164.68.118.17:7331/rpc
 
     ${dim("# Send 10 QTX")}
     tsx tools/wallet/qtx.ts send qtx1dest... 10 --key my-wallet.key.json
