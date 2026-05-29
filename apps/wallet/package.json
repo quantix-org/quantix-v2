@@ -2,22 +2,22 @@
   "name": "@quantix/wallet",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "dev": "next dev --port 9859",
+    "build": "next build",
+    "start": "next start --port 9859",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@noble/hashes": "*",
-    "@noble/post-quantum": "*",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "@noble/hashes": "^1.7.2",
+    "@noble/post-quantum": "^0.6.1",
+    "next": "15.3.2",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
   },
   "devDependencies": {
-    "@types/react": "^18.3.1",
-    "@types/react-dom": "^18.3.1",
-    "@vitejs/plugin-react": "^4.3.1",
-    "vite": "^5.4.19"
+    "@types/react": "^19.1.4",
+    "@types/react-dom": "^19.1.2",
+    "typescript": "^5.8.0"
   }
 }

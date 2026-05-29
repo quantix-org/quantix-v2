@@ -1,131 +1,129 @@
-/**
- * DashboardPanel — account overview with balance, staked, and latest block.
- */
+"use client";
+import { useState } from "react";
+import { useWallet } from "@/context/WalletContext";
+import { formatQtx, shortAddress, shortHash } from "@/lib/format";
+import { requestFaucet } from "@/lib/rpc";
 
-import { useCallback, useState } from "react";
-import { useWallet } from "../context/WalletContext";
-import { formatQtx, shortAddress } from "../lib/format";
+export default function DashboardPanel() {
+  const { wallet, balance, latestBlock, connected, loading, refresh } = useWallet();
+  const [faucetBusy, setFaucetBusy] = useState(false);
+  const [faucetError, setFaucetError] = useState<string | null>(null);
+  const [faucetTxHash, setFaucetTxHash] = useState<string | null>(null);
 
-export function DashboardPanel() {
-  const { wallet, account, latestBlock, connected, refreshAccount, refreshBlock } =
-    useWallet();
-  const [copying, setCopying] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
+  const available = balance?.balance ? BigInt(balance.balance) : null;
+  const staked = balance?.staked ? BigInt(balance.staked) : null;
 
-  const copyAddress = useCallback(async () => {
+  async function handleFaucet() {
     if (!wallet) return;
-    await navigator.clipboard.writeText(wallet.address);
-    setCopying(true);
-    setTimeout(() => setCopying(false), 1500);
-  }, [wallet]);
-
-  const handleRefresh = useCallback(async () => {
-    setRefreshing(true);
-    await Promise.all([refreshAccount(), refreshBlock()]);
-    setRefreshing(false);
-  }, [refreshAccount, refreshBlock]);
-
-  if (!wallet) return null;
+    setFaucetBusy(true);
+    setFaucetError(null);
+    setFaucetTxHash(null);
+    try {
+      const result = await requestFaucet(wallet.address);
+      setFaucetTxHash(result.txHash);
+      setTimeout(() => {
+        void refresh();
+      }, 1500);
+    } catch (e) {
+      setFaucetError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setFaucetBusy(false);
+    }
+  }
 
   return (
-    <div className="dashboard-panel">
-      {/* Address card */}
-      <div className="card address-card">
-        <div className="address-label">Your Address</div>
-        <div className="address-row">
-          <code className="address-full">{wallet.address}</code>
+    <div>
+      {/* Account card */}
+      <div className="card account-card">
+        <div className="account-name">Account</div>
+        <div className="address-short">{wallet?.address ?? "—"}</div>
+        <div className="balances">
+          <div className="bal-item">
+            <div className="bal-label">Available</div>
+            <div className="bal-value">
+              {available !== null ? formatQtx(available) : "—"}
+              <span className="bal-unit">QTX</span>
+            </div>
+          </div>
+          <div className="bal-item">
+            <div className="bal-label">Staked</div>
+            <div className="bal-value">
+              {staked !== null ? formatQtx(staked) : "—"}
+              <span className="bal-unit">QTX</span>
+            </div>
+          </div>
+        </div>
+        <div className="conn-row">
+          <div className={`dot ${connected ? "dot-green" : "dot-red"}`} />
+          <span style={{ fontSize: 12, color: "var(--muted)" }}>
+            {connected ? "Connected to node" : "Node unreachable"}
+          </span>
+          <button
+            className="btn btn-secondary btn-sm"
+            style={{ marginLeft: "auto" }}
+            onClick={handleFaucet}
+            disabled={faucetBusy || !wallet}
+            title="Fund this wallet once with 10 QTX"
+          >
+            {faucetBusy ? <span className="spinner" /> : "🚰 Faucet +10 QTX"}
+          </button>
           <button
             className="btn btn-ghost btn-sm"
-            onClick={copyAddress}
-            title="Copy address"
+            onClick={refresh}
+            disabled={loading}
           >
-            {copying ? "✓" : "⧉"}
+            {loading ? <span className="spinner" /> : "↻ Refresh"}
           </button>
         </div>
-        <div className="address-short">{shortAddress(wallet.address, 8)}</div>
+        {faucetError && <div className="error-text" style={{ marginTop: 8 }}>{faucetError}</div>}
+        {faucetTxHash && (
+          <div className="hint-text" style={{ marginTop: 8 }}>
+            Faucet tx submitted: {shortHash(faucetTxHash, 14)}
+          </div>
+        )}
       </div>
 
-      {/* Balance grid */}
-      <div className="stat-grid">
-        <div className="card stat-card">
-          <div className="stat-label">Balance</div>
-          <div className="stat-value">
-            {account ? (
-              <>
-                <span className="stat-num">{formatQtx(account.balance)}</span>
-                <span className="stat-unit"> QTX</span>
-              </>
-            ) : (
-              <span className="skeleton">——</span>
-            )}
-          </div>
+      {/* Latest block */}
+      <div className="card block-card">
+        <div className="block-header">
+          <div className="block-title">Latest Block</div>
+          {latestBlock && (
+            <span className="badge b-blue">#{latestBlock.height}</span>
+          )}
         </div>
-        <div className="card stat-card">
-          <div className="stat-label">Staked</div>
-          <div className="stat-value">
-            {account ? (
-              <>
-                <span className="stat-num">{formatQtx(account.staked)}</span>
-                <span className="stat-unit"> QTX</span>
-              </>
-            ) : (
-              <span className="skeleton">——</span>
-            )}
-          </div>
-        </div>
-        <div className="card stat-card">
-          <div className="stat-label">Latest Block</div>
-          <div className="stat-value">
-            {latestBlock ? (
-              <>
-                <span className="stat-num">#{latestBlock.height}</span>
-                <span className="stat-meta">
-                  {" "}
-                  · {latestBlock.txCount} tx
-                </span>
-              </>
-            ) : (
-              <span className="skeleton">——</span>
-            )}
-          </div>
-        </div>
-        <div className="card stat-card">
-          <div className="stat-label">Node</div>
-          <div className="stat-value">
-            <span
-              className={`dot ${connected ? "dot-green" : "dot-red"}`}
-            />
-            {connected ? "Connected" : "Disconnected"}
-          </div>
-        </div>
+        {latestBlock ? (
+          <>
+            <div className="block-detail">
+              <span className="meta-label">Hash</span>
+              <span className="meta-val">{shortHash(latestBlock.hash, 12)}</span>
+            </div>
+            <div className="block-detail">
+              <span className="meta-label">Time</span>
+              <span className="meta-val">{new Date(latestBlock.timestamp).toLocaleString()}</span>
+            </div>
+            <div className="block-detail">
+              <span className="meta-label">Tx count</span>
+              <span className="meta-val">{latestBlock.txCount}</span>
+            </div>
+            <div className="block-detail">
+              <span className="meta-label">Proposer</span>
+              <span className="meta-val">{shortAddress(latestBlock.proposer || undefined)}</span>
+            </div>
+          </>
+        ) : (
+          <div className="empty">{loading ? "Loading…" : "No blocks yet"}</div>
+        )}
       </div>
 
-      {latestBlock && (
-        <div className="card block-card">
-          <div className="block-header">
-            <span className="block-title">Latest Block</span>
-            <button
-              className="btn btn-ghost btn-sm"
-              onClick={handleRefresh}
-              disabled={refreshing}
-              title="Refresh"
-            >
-              {refreshing ? "…" : "↺"}
-            </button>
-          </div>
-          <div className="block-detail">
-            <span className="meta-label">Hash</span>
-            <code className="meta-val">{latestBlock.hash.slice(0, 32)}…</code>
-          </div>
-          <div className="block-detail">
-            <span className="meta-label">Validator</span>
-            <code className="meta-val">{shortAddress(latestBlock.proposer || undefined)}</code>
-          </div>
-          <div className="block-detail">
-            <span className="meta-label">Time</span>
-            <span className="meta-val">
-              {new Date(latestBlock.timestamp).toLocaleTimeString()}
-            </span>
+      {/* Nonce */}
+      {balance && (
+        <div className="card">
+          <div className="card-head">Account Info</div>
+          <div style={{ padding: "12px 16px", display: "flex", gap: 24 }}>
+            <div>
+              <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>NONCE</div>
+              <div style={{ fontFamily: "var(--mono)", fontSize: 16, fontWeight: 700 }}>{balance.nonce}</div>
+            </div>
           </div>
         </div>
       )}

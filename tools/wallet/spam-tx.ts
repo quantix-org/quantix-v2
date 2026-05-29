@@ -105,7 +105,7 @@ function parseArgv(argv: string[]) {
   }
   return {
     key:   raw["key"]   ?? "./my-wallet.key.json",
-    rpc:   raw["rpc"]   ?? "http://localhost:7331/rpc",
+    rpc:   raw["rpc"]   ?? "http://164.68.118.17:7331/rpc",
     count: parseInt(raw["count"] ?? "14400", 10),
     min:   parseQtx(raw["min"]   ?? "5"),
     max:   parseQtx(raw["max"]   ?? "25"),
@@ -129,7 +129,8 @@ const BUILTIN_TARGETS = [
   "qtx1b448db243108713e5c0c0388719eab72b45dbf",  // mywallet4.key.json
   "qtx11184c74dcf161c92ba4ee2a5126cac0626eae1",  // mywallet5.key.json
   "qtx1e8e182f230b5a40d96841678c340fecbf1a3bf",  // mywallet6.key.json
-  "qtx12516934a47ad016fda4ab6844782e0de9afff2"   // mywallet7.key.json
+  "qtx12516934a47ad016fda4ab6844782e0de9afff2",   // mywallet7.key.json
+  "qtx1cf93268a34e32ef999136ece93044f75302802"
 ];
 
 function pick<T>(arr: T[]): T {

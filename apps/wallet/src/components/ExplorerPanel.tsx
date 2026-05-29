@@ -1,146 +1,180 @@
-/**
- * ExplorerPanel — view validators, mempool, and latest block details.
- */
+"use client";
+import { useState, useEffect } from "react";
+import { getLatestBlock, getBlock, getMempool, getValidators, type RpcBlock, type RpcTx, type RpcValidator } from "@/lib/rpc";
+import { formatQtx, shortAddress, shortHash } from "@/lib/format";
 
-import { useCallback, useEffect, useState } from "react";
-import { useWallet } from "../context/WalletContext";
-import { formatQtx, shortAddress, shortHash } from "../lib/format";
-import { getValidators, getMempool, getLatestBlock } from "../lib/rpc";
-import type { RpcValidator, RpcMempoolEntry, RpcBlock } from "../lib/rpc";
+type Tab = "blocks" | "mempool" | "validators";
 
-export function ExplorerPanel() {
-  const { endpoint, connected } = useWallet();
+export default function ExplorerPanel() {
+  const [tab, setTab] = useState<Tab>("blocks");
+  const [blocks, setBlocks] = useState<RpcBlock[]>([]);
+  const [mempool, setMempool] = useState<RpcTx[]>([]);
   const [validators, setValidators] = useState<RpcValidator[]>([]);
-  const [mempool, setMempool] = useState<RpcMempoolEntry[]>([]);
-  const [block, setBlock] = useState<RpcBlock | null>(null);
   const [loading, setLoading] = useState(false);
-
-  const refresh = useCallback(async () => {
-    if (!connected) return;
-    setLoading(true);
-    try {
-      const [vs, mp, blk] = await Promise.all([
-        getValidators(endpoint),
-        getMempool(endpoint),
-        getLatestBlock(endpoint),
-      ]);
-      setValidators(vs);
-      setMempool(mp);
-      setBlock(blk);
-    } catch {
-      // non-fatal — errors shown inline
-    } finally {
-      setLoading(false);
-    }
-  }, [endpoint, connected]);
+  const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      setErr(null);
+      try {
+        if (tab === "blocks") {
+          const latest = await getLatestBlock();
+          const heights = [];
+          for (let h = latest.height; h >= Math.max(0, latest.height - 9); h--) {
+            heights.push(h);
+          }
+          const fetched: RpcBlock[] = [];
+          for (const h of heights) {
+            try { fetched.push(await getBlock(h)); } catch { /* skip */ }
+          }
+          if (!cancelled) setBlocks(fetched);
+        } else if (tab === "mempool") {
+          const mp = await getMempool();
+          if (!cancelled) setMempool(mp);
+        } else {
+          const vs = await getValidators();
+          if (!cancelled) setValidators(vs);
+        }
+      } catch (e) {
+        if (!cancelled) setErr(e instanceof Error ? e.message : "Failed to load");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    const iv = setInterval(load, 10_000);
+    return () => { cancelled = true; clearInterval(iv); };
+  }, [tab]);
 
   return (
-    <div className="explorer-panel">
-      <div className="explorer-header">
-        <h2>Explorer</h2>
-        <button
-          className="btn btn-ghost btn-sm"
-          onClick={refresh}
-          disabled={loading}
-        >
-          {loading ? "…" : "↺ Refresh"}
-        </button>
+    <div>
+      <div className="tab-row" style={{ marginBottom: 14 }}>
+        {(["blocks", "mempool", "validators"] as Tab[]).map((t) => (
+          <button
+            key={t}
+            className={`tab-inner ${tab === t ? "tab-inner-active" : ""}`}
+            onClick={() => setTab(t)}
+          >
+            {t.charAt(0).toUpperCase() + t.slice(1)}
+          </button>
+        ))}
       </div>
 
-      {/* Latest block */}
-      {block && (
-        <div className="card explorer-block">
-          <div className="section-title">Latest Block #{block.height}</div>
-          <div className="kv-row">
-            <span className="kv-key">Hash</span>
-            <code className="kv-val">{shortHash(block.hash, 12)}</code>
-          </div>
-          <div className="kv-row">
-            <span className="kv-key">Proposer</span>
-            <code className="kv-val">{shortAddress(block.proposer || undefined)}</code>
-          </div>
-          <div className="kv-row">
-            <span className="kv-key">Transactions</span>
-            <span className="kv-val">{block.txCount}</span>
-          </div>
-          <div className="kv-row">
-            <span className="kv-key">Time</span>
-            <span className="kv-val">
-              {new Date(block.timestamp).toLocaleString()}
-            </span>
-          </div>
+      {err && <div className="error-text" style={{ marginBottom: 10 }}>{err}</div>}
+
+      {tab === "blocks" && (
+        <div className="card">
+          <div className="card-head">Recent Blocks</div>
+          {loading && blocks.length === 0
+            ? <div className="loading-row"><span className="spinner" /></div>
+            : blocks.length === 0
+            ? <div className="empty">No blocks yet</div>
+            : (
+              <table className="tbl">
+                <thead>
+                  <tr>
+                    <th>Height</th>
+                    <th>Hash</th>
+                    <th>Time</th>
+                    <th>Txs</th>
+                    <th>Proposer</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {blocks.map((b) => (
+                    <tr key={b.hash}>
+                      <td><span className="badge b-blue">#{b.height}</span></td>
+                      <td>{shortHash(b.hash, 12)}</td>
+                      <td>{new Date(b.timestamp).toLocaleTimeString()}</td>
+                      <td>{b.txCount}</td>
+                      <td>{shortAddress(b.proposer || undefined)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
         </div>
       )}
 
-      {/* Validators */}
-      <div className="card">
-        <div className="section-title">Validators ({validators.length})</div>
-        {validators.length === 0 ? (
-          <div className="hint">{loading ? "Loading…" : "No validators found."}</div>
-        ) : (
-          <div className="table-wrap">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Address</th>
-                  <th>Stake</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {validators.map((v) => (
-                  <tr key={v.id}>
-                    <td><code>{v.id}</code></td>
-                    <td><code>{shortAddress(v.address)}</code></td>
-                    <td>{formatQtx(BigInt(v.stake))} QTX</td>
-                    <td>
-                      <span className={`badge ${v.active ? "badge-green" : "badge-grey"}`}>
-                        {v.active ? "active" : "inactive"}
-                      </span>
-                    </td>
+      {tab === "mempool" && (
+        <div className="card">
+          <div className="card-head">Mempool — {mempool.length} pending tx{mempool.length !== 1 ? "s" : ""}</div>
+          {loading && mempool.length === 0
+            ? <div className="loading-row"><span className="spinner" /></div>
+            : mempool.length === 0
+            ? <div className="empty">Mempool is empty</div>
+            : (
+              <table className="tbl">
+                <thead>
+                  <tr>
+                    <th>Type</th>
+                    <th>From</th>
+                    <th>To</th>
+                    <th>Amount</th>
+                    <th>Nonce</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+                </thead>
+                <tbody>
+                  {mempool.map((tx, i) => (
+                    <tr key={i}>
+                      <td><span className={`badge ${txBadge(tx.type)}`}>{tx.type}</span></td>
+                      <td>{shortAddress(tx.from)}</td>
+                      <td>{tx.to ? shortAddress(tx.to) : "—"}</td>
+                      <td>{formatQtx(BigInt(tx.amount))} QTX</td>
+                      <td>{tx.nonce}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+        </div>
+      )}
 
-      {/* Mempool */}
-      <div className="card">
-        <div className="section-title">Mempool ({mempool.length} pending)</div>
-        {mempool.length === 0 ? (
-          <div className="hint">{loading ? "Loading…" : "Mempool is empty."}</div>
-        ) : (
-          <div className="table-wrap">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Hash</th>
-                  <th>Type</th>
-                  <th>From</th>
-                  <th>Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {mempool.map((tx) => (
-                  <tr key={tx.hash}>
-                    <td><code>{shortHash(tx.hash, 8)}</code></td>
-                    <td><span className="badge badge-purple">{tx.type}</span></td>
-                    <td><code>{shortAddress(tx.from)}</code></td>
-                    <td>{formatQtx(BigInt(tx.amount))} QTX</td>
+      {tab === "validators" && (
+        <div className="card">
+          <div className="card-head">Validators — {validators.filter((v) => v.active).length} active</div>
+          {loading && validators.length === 0
+            ? <div className="loading-row"><span className="spinner" /></div>
+            : validators.length === 0
+            ? <div className="empty">No validators registered</div>
+            : (
+              <table className="tbl">
+                <thead>
+                  <tr>
+                    <th>Address</th>
+                    <th>Stake</th>
+                    <th>Status</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+                </thead>
+                <tbody>
+                  {validators.map((v) => (
+                    <tr key={v.address}>
+                      <td>{shortAddress(v.address)}</td>
+                      <td>{formatQtx(BigInt(v.stake))} QTX</td>
+                      <td>
+                        <span className={`badge ${v.active ? "b-green" : "b-gray"}`}>
+                          {v.active ? "active" : "inactive"}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+        </div>
+      )}
     </div>
   );
+}
+
+function txBadge(type: string) {
+  switch (type) {
+    case "transfer": return "b-blue";
+    case "stake": return "b-green";
+    case "unstake": return "b-orange";
+    case "validator_register": return "b-red";
+    default: return "b-gray";
+  }
 }

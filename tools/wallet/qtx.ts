@@ -13,7 +13,7 @@
  *   send       <to> <amount> --key <f> [options]    Transfer QTX
  *   stake      <amount>     --key <f> [options]     Stake QTX
  *   unstake    <amount>     --key <f> [options]     Unstake QTX
- *   validator  register <id> <amount> --key <f>     Register as validator
+ *   validator  register <amount> --key <f>           Register as validator
  *   block      <height|latest> [--rpc <url>]        Look up a block
  *   tx         <hash>         [--rpc <url>]         Look up a transaction
  *   chain      [--rpc <url>]                        Show chain info

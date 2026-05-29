@@ -9,5 +9,6 @@ ceklist
 testnets/*/data/
 apps/node/testnets/*/data/
 .vscode
-
+apps/wallet/.env.local
 guide.md
+apps/wallet/.next

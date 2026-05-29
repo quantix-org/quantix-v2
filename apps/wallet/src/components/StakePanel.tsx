@@ -1,162 +1,173 @@
-/**
- * StakePanel — stake and unstake QTX with a validator.
- */
+"use client";
+import { useState } from "react";
+import { useWallet } from "@/context/WalletContext";
+import { walletFileToKeyPair, signPayload } from "@/lib/crypto";
+import { parseQtx, formatQtx } from "@/lib/format";
+import {
+  getNextNonce,
+  submitTx,
+  transactionSigningPayload,
+  type WireTx,
+} from "@/lib/rpc";
 
-import { useCallback, useEffect, useState } from "react";
-import { useWallet } from "../context/WalletContext";
-import { parseQtx, formatQtx } from "../lib/format";
-import { getNextNonce, getValidators, submitTx } from "../lib/rpc";
-import type { RpcValidator } from "../lib/rpc";
-import { buildStake, buildUnstake } from "../lib/tx";
+const CHAIN_ID = "quantix-devnet";
+const BASE_FEE = 1n;
+const MIN_STAKE = 32n * 10n ** 18n; // 32 QTX
 
-export function StakePanel() {
-  const { wallet, endpoint, chainId, account, refreshAccount } = useWallet();
-  const [validators, setValidators] = useState<RpcValidator[]>([]);
-  const [selectedId, setSelectedId] = useState("");
+type Tab = "stake" | "unstake" | "register";
+
+export default function StakePanel() {
+  const { wallet, balance, refresh } = useWallet();
+  const [tab, setTab] = useState<Tab>("stake");
   const [amountStr, setAmountStr] = useState("");
-  const [mode, setMode] = useState<"stake" | "unstake">("stake");
-  const [sending, setSending] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [txHash, setTxHash] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loadingValidators, setLoadingValidators] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
 
-  useEffect(() => {
-    setLoadingValidators(true);
-    getValidators(endpoint)
-      .then((vs) => {
-        setValidators(vs);
-        if (vs.length > 0 && !selectedId) setSelectedId(vs[0].id);
-      })
-      .catch(() => {/* non-fatal */})
-      .finally(() => setLoadingValidators(false));
-  }, [endpoint]); // eslint-disable-line react-hooks/exhaustive-deps
+  const available = balance?.balance ? BigInt(balance.balance) : null;
+  const staked = balance?.staked ? BigInt(balance.staked) : null;
 
-  const handleSubmit = useCallback(async () => {
-    if (!wallet || !selectedId) return;
-    setError(null);
+  function reset() {
+    setAmountStr("");
+    setTxHash(null);
+    setErr(null);
+  }
+
+  async function handleSubmit() {
+    if (!wallet) return;
+    setErr(null);
     setTxHash(null);
 
     let amount: bigint;
-    try {
-      amount = parseQtx(amountStr);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Invalid amount");
-      return;
-    }
-    if (amount <= 0n) {
-      setError("Amount must be greater than 0");
-      return;
+    if (tab === "register") {
+      amount = MIN_STAKE;
+    } else {
+      try {
+        amount = parseQtx(amountStr);
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : "Invalid amount");
+        return;
+      }
+      if (amount <= 0n) { setErr("Amount must be > 0"); return; }
     }
 
-    setSending(true);
+    setBusy(true);
     try {
-      const nonce = await getNextNonce(endpoint, wallet.address);
-      const builder = mode === "stake" ? buildStake : buildUnstake;
-      const tx = builder({
+      const nonce = await getNextNonce(wallet.address);
+      const timestamp = Date.now();
+
+      const txType =
+        tab === "stake" ? "stake" :
+        tab === "unstake" ? "unstake" :
+        "validator_register";
+
+      const unsigned = {
+        type: txType as "stake" | "unstake" | "validator_register",
+        chainId: CHAIN_ID,
         from: wallet.address,
-        publicKey: wallet.publicKey,
-        privateKey: wallet.privateKey,
         nonce,
-        chainId,
+        timestamp,
         amount,
-        validatorId: selectedId,
-      });
-      const hash = await submitTx(endpoint, tx);
-      setTxHash(hash);
-      setAmountStr("");
-      await refreshAccount();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSending(false);
-    }
-  }, [wallet, endpoint, chainId, selectedId, amountStr, mode, refreshAccount]);
+        fee: BASE_FEE,
+        validatorId: tab === "register" ? wallet.address : undefined,
+      };
 
-  if (!wallet) return null;
+      const payload = transactionSigningPayload(unsigned);
+      const kp = walletFileToKeyPair(wallet);
+      const signature = signPayload(kp.privateKey, payload);
+
+      const wireTx: WireTx = {
+        ...unsigned,
+        amount: amount.toString(),
+        fee: BASE_FEE.toString(),
+        signerPublicKey: wallet.publicKey,
+        signature,
+      };
+
+      const result = await submitTx(wireTx);
+      setTxHash(result.txHash);
+      setAmountStr("");
+      setTimeout(refresh, 2000);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Transaction failed");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
-    <div className="form-panel">
-      <h2>Stake / Unstake</h2>
+    <div className="card panel-card">
+      <h2>Stake / Validate</h2>
+      <p className="sub">Stake QTX to earn rewards or register as a validator.</p>
 
-      {account && (
-        <div className="stake-summary">
-          <span>Currently staked: <strong>{formatQtx(account.staked)} QTX</strong></span>
+      <div className="staked-info">
+        <div className="lbl">Currently staked</div>
+        <div className="val">{staked !== null ? formatQtx(staked) : "—"}<span className="sub"> QTX</span></div>
+      </div>
+
+      <div className="tab-row">
+        {(["stake", "unstake", "register"] as Tab[]).map((t) => (
+          <button
+            key={t}
+            className={`tab-inner ${tab === t ? "tab-inner-active" : ""}`}
+            onClick={() => { setTab(t); reset(); }}
+          >
+            {t === "stake" ? "Stake" : t === "unstake" ? "Unstake" : "Register validator"}
+          </button>
+        ))}
+      </div>
+
+      {tab === "register" ? (
+        <div>
+          <p style={{ color: "var(--muted)", fontSize: 13, marginBottom: 14 }}>
+            Registers your address as a validator. Requires a minimum stake of{" "}
+            <strong style={{ color: "var(--text)" }}>32 QTX</strong> which will be locked.
+          </p>
+          {available !== null && (
+            <div className="avail-row">Available: <span>{formatQtx(available)} QTX</span></div>
+          )}
+        </div>
+      ) : (
+        <div>
+          {available !== null && tab === "stake" && (
+            <div className="avail-row">Available: <span>{formatQtx(available)} QTX</span></div>
+          )}
+          {staked !== null && tab === "unstake" && (
+            <div className="avail-row">Staked: <span>{formatQtx(staked)} QTX</span></div>
+          )}
+          <div className="field">
+            <label>Amount (QTX)</label>
+            <input
+              className="input"
+              placeholder="0.0"
+              value={amountStr}
+              onChange={(e) => setAmountStr(e.target.value)}
+              disabled={busy}
+            />
+          </div>
         </div>
       )}
+
+      {err && <div className="error-text">{err}</div>}
 
       {txHash && (
-        <div className="success-box">
-          <div>✓ Transaction submitted</div>
-          <code className="hash-val">{txHash}</code>
+        <div className="tx-result">
+          <div className="success">✓ Transaction submitted</div>
+          <div className="hash">tx: {txHash}</div>
         </div>
       )}
-      {error && <div className="error-box">{error}</div>}
-
-      {/* Stake / Unstake toggle */}
-      <div className="mode-toggle">
-        <button
-          className={`btn ${mode === "stake" ? "btn-primary" : "btn-secondary"}`}
-          onClick={() => setMode("stake")}
-        >
-          Stake
-        </button>
-        <button
-          className={`btn ${mode === "unstake" ? "btn-primary" : "btn-secondary"}`}
-          onClick={() => setMode("unstake")}
-        >
-          Unstake
-        </button>
-      </div>
-
-      <div className="form-group">
-        <label htmlFor="validator-select">Validator</label>
-        {loadingValidators ? (
-          <div className="skeleton">Loading validators…</div>
-        ) : validators.length === 0 ? (
-          <div className="hint">No validators found on this network.</div>
-        ) : (
-          <select
-            id="validator-select"
-            className="input"
-            value={selectedId}
-            onChange={(e) => setSelectedId(e.target.value)}
-            disabled={sending}
-          >
-            {validators.map((v) => (
-              <option key={v.id} value={v.id}>
-                {v.id} — {formatQtx(BigInt(v.stake))} QTX staked
-                {v.active ? " ✓" : " (inactive)"}
-              </option>
-            ))}
-          </select>
-        )}
-      </div>
-
-      <div className="form-group">
-        <label htmlFor="stake-amount">Amount (QTX)</label>
-        <input
-          id="stake-amount"
-          className="input"
-          type="text"
-          placeholder="0.0"
-          value={amountStr}
-          onChange={(e) => setAmountStr(e.target.value)}
-          disabled={sending}
-        />
-      </div>
 
       <button
-        className="btn btn-primary btn-full"
+        className="btn btn-primary"
         onClick={handleSubmit}
-        disabled={sending || !amountStr || !selectedId}
+        disabled={busy || !wallet || (tab !== "register" && !amountStr)}
+        style={{ marginTop: 8 }}
       >
-        {sending ? (
-          <span className="spinner-row">
-            <span className="spinner" /> Processing…
-          </span>
-        ) : (
-          mode === "stake" ? "Stake QTX" : "Unstake QTX"
-        )}
+        {busy
+          ? <span className="spinner-row"><span className="spinner" /> Processing…</span>
+          : tab === "stake" ? "Stake"
+          : tab === "unstake" ? "Unstake"
+          : "Register validator"}
       </button>
     </div>
   );

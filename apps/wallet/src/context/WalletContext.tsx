@@ -1,170 +1,122 @@
-/**
- * Global wallet state and context.
- * Private keys NEVER touch localStorage — session memory only.
- */
+"use client";
+import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from "react";
+import { type WalletFile, parseWalletFile } from "@/lib/crypto";
+import { getBalance, getLatestBlock, type RpcBalance, type RpcBlock } from "@/lib/rpc";
 
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
-import type { ReactNode } from "react";
-import type { WalletFile } from "../lib/crypto";
-import {
-  getBalance,
-  getLatestBlock,
-  testConnection,
-} from "../lib/rpc";
-import type { RpcBlock } from "../lib/rpc";
+// ── Types ────────────────────────────────────────────────────────────────────
 
-// ─── State types ──────────────────────────────────────────────────────────────
-
-export interface AccountState {
-  balance: bigint;
-  staked: bigint;
-  nonce: number;
-}
-
-export interface WalletState {
+interface WalletState {
   wallet: WalletFile | null;
-  endpoint: string;
-  chainId: string;
-  connected: boolean;
-  connecting: boolean;
-  account: AccountState | null;
+  balance: RpcBalance | null;
   latestBlock: RpcBlock | null;
+  connected: boolean;
+  loading: boolean;
   error: string | null;
+  nodeUrl: string;
+  setNodeUrl: (url: string) => void;
+  loadWallet: (wf: WalletFile) => void;
+  clearWallet: () => void;
+  refresh: () => Promise<void>;
 }
 
-export interface WalletActions {
-  setWallet: (w: WalletFile | null) => void;
-  setEndpoint: (url: string) => void;
-  refreshAccount: () => Promise<void>;
-  refreshBlock: () => Promise<void>;
-  connect: () => Promise<void>;
-  clearError: () => void;
-}
+const WalletCtx = createContext<WalletState | null>(null);
 
-// ─── Context ──────────────────────────────────────────────────────────────────
+const STORAGE_KEY = "qtx_wallet_v1";
+const NODE_URL_KEY = "qtx_node_url";
+const DEFAULT_NODE = "http://localhost:7330/rpc";
 
-const WalletContext = createContext<(WalletState & WalletActions) | null>(null);
-
-export function useWallet(): WalletState & WalletActions {
-  const ctx = useContext(WalletContext);
-  if (!ctx) throw new Error("useWallet must be used inside <WalletProvider>");
-  return ctx;
-}
-
-// ─── Provider ─────────────────────────────────────────────────────────────────
+// ── Provider ─────────────────────────────────────────────────────────────────
 
 export function WalletProvider({ children }: { children: ReactNode }) {
-  const [wallet, setWalletState] = useState<WalletFile | null>(null);
-  const [endpoint, setEndpointState] = useState(
-    () => localStorage.getItem("qtx_endpoint") ?? "http://localhost:7330/rpc"
-  );
-  const [chainId] = useState("quantix-devnet");
-  const [connected, setConnected] = useState(false);
-  const [connecting, setConnecting] = useState(false);
-  const [account, setAccount] = useState<AccountState | null>(null);
+  const [wallet, setWallet] = useState<WalletFile | null>(null);
+  const [balance, setBalance] = useState<RpcBalance | null>(null);
   const [latestBlock, setLatestBlock] = useState<RpcBlock | null>(null);
+  const [connected, setConnected] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [nodeUrl, setNodeUrlState] = useState(DEFAULT_NODE);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const endpointRef = useRef(endpoint);
+  // ── Hydrate from sessionStorage (private key NOT in localStorage) ──────────
   useEffect(() => {
-    endpointRef.current = endpoint;
-  }, [endpoint]);
-
-  const clearError = useCallback(() => setError(null), []);
-
-  const setEndpoint = useCallback((url: string) => {
-    setEndpointState(url);
-    localStorage.setItem("qtx_endpoint", url);
-    setConnected(false);
-  }, []);
-
-  const setWallet = useCallback((w: WalletFile | null) => {
-    setWalletState(w);
-    setAccount(null);
-  }, []);
-
-  const refreshBlock = useCallback(async () => {
     try {
-      const block = await getLatestBlock(endpointRef.current);
-      setLatestBlock(block);
+      const raw = sessionStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const parsed = parseWalletFile(JSON.parse(raw));
+        setWallet(parsed);
+      }
     } catch {
-      // non-fatal
+      try { sessionStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+      setError("Stored wallet is incompatible or corrupted. Please import a valid ML-DSA-87 wallet file.");
     }
+
+    try {
+      const saved = localStorage.getItem(NODE_URL_KEY);
+      if (saved) setNodeUrlState(saved);
+    } catch { /* ignore */ }
   }, []);
 
-  const refreshAccount = useCallback(async () => {
-    if (!wallet) return;
+  // ── Refresh balance + latest block ────────────────────────────────────────
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError(null);
     try {
-      const bal = await getBalance(endpointRef.current, wallet.address);
-      setAccount({
-        balance: BigInt(bal.balance),
-        staked: BigInt(bal.staked),
-        nonce: 0, // nonce fetched on-demand at send time
-      });
+      const [block, bal] = await Promise.all([
+        getLatestBlock(),
+        wallet ? getBalance(wallet.address) : Promise.resolve(null),
+      ]);
+      setLatestBlock(block);
+      if (bal) setBalance(bal);
+      setConnected(true);
     } catch (e) {
+      setConnected(false);
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
     }
   }, [wallet]);
 
-  const connect = useCallback(async () => {
-    setConnecting(true);
+  // ── Start / stop polling when wallet or nodeUrl changes ───────────────────
+  useEffect(() => {
+    refresh();
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = setInterval(refresh, 10_000);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [refresh, nodeUrl]); // nodeUrl triggers re-render → new fetch via /api/rpc
+
+  // ── Actions ───────────────────────────────────────────────────────────────
+  const loadWallet = useCallback((wf: WalletFile) => {
+    const parsed = parseWalletFile(wf);
+    setWallet(parsed);
     setError(null);
-    try {
-      await testConnection(endpointRef.current);
-      setConnected(true);
-      await refreshBlock();
-    } catch (e) {
-      setConnected(false);
-      setError(
-        `Cannot reach node at ${endpointRef.current} — ${
-          e instanceof Error ? e.message : String(e)
-        }`
-      );
-    } finally {
-      setConnecting(false);
-    }
-  }, [refreshBlock]);
+    try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(parsed)); } catch { /* ignore */ }
+  }, []);
 
-  // Auto-connect on mount and when endpoint changes
-  useEffect(() => {
-    connect();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [endpoint]);
+  const clearWallet = useCallback(() => {
+    setWallet(null);
+    setBalance(null);
+    try { sessionStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+  }, []);
 
-  // Refresh account whenever wallet or connection state changes
-  useEffect(() => {
-    if (connected && wallet) {
-      refreshAccount();
-    }
-  }, [connected, wallet, refreshAccount]);
+  const setNodeUrl = useCallback((url: string) => {
+    setNodeUrlState(url);
+    try { localStorage.setItem(NODE_URL_KEY, url); } catch { /* ignore */ }
+  }, []);
 
   return (
-    <WalletContext.Provider
-      value={{
-        wallet,
-        endpoint,
-        chainId,
-        connected,
-        connecting,
-        account,
-        latestBlock,
-        error,
-        setWallet,
-        setEndpoint,
-        refreshAccount,
-        refreshBlock,
-        connect,
-        clearError,
-      }}
-    >
+    <WalletCtx.Provider value={{
+      wallet, balance, latestBlock, connected, loading, error,
+      nodeUrl, setNodeUrl, loadWallet, clearWallet, refresh,
+    }}>
       {children}
-    </WalletContext.Provider>
+    </WalletCtx.Provider>
   );
+}
+
+// ── Hook ──────────────────────────────────────────────────────────────────────
+
+export function useWallet(): WalletState {
+  const ctx = useContext(WalletCtx);
+  if (!ctx) throw new Error("useWallet must be used inside <WalletProvider>");
+  return ctx;
 }

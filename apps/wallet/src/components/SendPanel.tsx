@@ -1,121 +1,158 @@
-/**
- * SendPanel — compose and broadcast a transfer transaction.
- */
+"use client";
+import { useState } from "react";
+import { useWallet } from "@/context/WalletContext";
+import { walletFileToKeyPair, signPayload } from "@/lib/crypto";
+import { parseQtx, formatQtx } from "@/lib/format";
+import {
+  getNextNonce,
+  submitTx,
+  transactionSigningPayload,
+  type WireTx,
+} from "@/lib/rpc";
 
-import { useCallback, useState } from "react";
-import { useWallet } from "../context/WalletContext";
-import { parseQtx, ONE_QTX } from "../lib/format";
-import { getNextNonce, submitTx } from "../lib/rpc";
-import { buildTransfer } from "../lib/tx";
+const CHAIN_ID = "quantix-devnet";
+const BASE_FEE = 1n; // 1 base unit
 
-export function SendPanel() {
-  const { wallet, endpoint, chainId, refreshAccount } = useWallet();
+export default function SendPanel() {
+  const { wallet, balance, refresh } = useWallet();
+
   const [to, setTo] = useState("");
   const [amountStr, setAmountStr] = useState("");
-  const [sending, setSending] = useState(false);
+  const [feeStr, setFeeStr] = useState("0");
+  const [busy, setBusy] = useState(false);
   const [txHash, setTxHash] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
 
-  const handleSend = useCallback(async () => {
+  const available = balance?.balance ? BigInt(balance.balance) : null;
+
+  async function handleSend() {
     if (!wallet) return;
-    setError(null);
+    setErr(null);
     setTxHash(null);
 
-    // Validate inputs
-    if (!to.startsWith("qtx1")) {
-      setError("Recipient must be a Quantix address starting with qtx1");
-      return;
-    }
     let amount: bigint;
+    let extraFee: bigint;
     try {
       amount = parseQtx(amountStr);
+      extraFee = parseQtx(feeStr || "0");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Invalid amount");
-      return;
-    }
-    if (amount < ONE_QTX / 1000n) {
-      setError("Amount too small (minimum 0.001 QTX)");
+      setErr(e instanceof Error ? e.message : "Invalid amount");
       return;
     }
 
-    setSending(true);
+    if (amount <= 0n) { setErr("Amount must be > 0"); return; }
+    if (!to.startsWith("qtx1") || to.length !== 42) {
+      setErr("Recipient must be a valid qtx1… address (42 chars)");
+      return;
+    }
+
+    const totalFee = BASE_FEE + extraFee;
+    const total = amount + totalFee;
+    if (available !== null && total > available) {
+      setErr(`Insufficient balance (need ${formatQtx(total)} QTX, have ${formatQtx(available)} QTX)`);
+      return;
+    }
+
+    setBusy(true);
     try {
-      const nonce = await getNextNonce(endpoint, wallet.address);
-      const tx = buildTransfer({
+      const nonce = await getNextNonce(wallet.address);
+      const timestamp = Date.now();
+
+      const unsigned = {
+        type: "transfer" as const,
+        chainId: CHAIN_ID,
         from: wallet.address,
-        publicKey: wallet.publicKey,
-        privateKey: wallet.privateKey,
         nonce,
-        chainId,
-        to,
+        timestamp,
         amount,
-      });
-      const hash = await submitTx(endpoint, tx);
-      setTxHash(hash);
+        fee: totalFee,
+        to,
+      };
+
+      const payload = transactionSigningPayload(unsigned);
+      const kp = walletFileToKeyPair(wallet);
+      const signature = signPayload(kp.privateKey, payload);
+
+      const wireTx: WireTx = {
+        ...unsigned,
+        amount: amount.toString(),
+        fee: totalFee.toString(),
+        signerPublicKey: wallet.publicKey,
+        signature,
+      };
+
+      const result = await submitTx(wireTx);
+      setTxHash(result.txHash);
       setTo("");
       setAmountStr("");
-      await refreshAccount();
+      setFeeStr("0");
+      setTimeout(refresh, 2000);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setErr(e instanceof Error ? e.message : "Transaction failed");
     } finally {
-      setSending(false);
+      setBusy(false);
     }
-  }, [wallet, endpoint, chainId, to, amountStr, refreshAccount]);
-
-  if (!wallet) return null;
+  }
 
   return (
-    <div className="form-panel">
+    <div className="card panel-card">
       <h2>Send QTX</h2>
+      <p className="sub">Transfer QTX to another address on Quantix devnet.</p>
 
-      {txHash && (
-        <div className="success-box">
-          <div>✓ Transaction submitted</div>
-          <code className="hash-val">{txHash}</code>
-        </div>
+      {available !== null && (
+        <div className="avail-row">Available: <span>{formatQtx(available)} QTX</span></div>
       )}
-      {error && <div className="error-box">{error}</div>}
 
-      <div className="form-group">
-        <label htmlFor="send-to">Recipient Address</label>
+      <div className="field">
+        <label>Recipient address</label>
         <input
-          id="send-to"
           className="input"
-          type="text"
           placeholder="qtx1…"
           value={to}
-          onChange={(e) => setTo(e.target.value)}
-          disabled={sending}
+          onChange={(e) => setTo(e.target.value.trim())}
+          disabled={busy}
         />
       </div>
 
-      <div className="form-group">
-        <label htmlFor="send-amount">Amount (QTX)</label>
+      <div className="field">
+        <label>Amount (QTX)</label>
         <input
-          id="send-amount"
           className="input"
-          type="text"
           placeholder="0.0"
           value={amountStr}
           onChange={(e) => setAmountStr(e.target.value)}
-          disabled={sending}
+          disabled={busy}
         />
       </div>
 
-      <div className="fee-note">Network fee: 0.000000000000001 QTX (1000 base units)</div>
+      <div className="field">
+        <label>Extra fee (QTX) — optional</label>
+        <input
+          className="input"
+          placeholder="0"
+          value={feeStr}
+          onChange={(e) => setFeeStr(e.target.value)}
+          disabled={busy}
+        />
+        <div className="hint-text">Base fee: 0.000000000000000001 QTX. Extra fee speeds up inclusion.</div>
+      </div>
+
+      {err && <div className="error-text">{err}</div>}
+
+      {txHash && (
+        <div className="tx-result">
+          <div className="success">✓ Transaction submitted</div>
+          <div className="hash">tx: {txHash}</div>
+        </div>
+      )}
 
       <button
-        className="btn btn-primary btn-full"
+        className="btn btn-primary"
         onClick={handleSend}
-        disabled={sending || !to || !amountStr}
+        disabled={busy || !wallet || !amountStr || !to}
+        style={{ marginTop: 8 }}
       >
-        {sending ? (
-          <span className="spinner-row">
-            <span className="spinner" /> Signing & Broadcasting…
-          </span>
-        ) : (
-          "Send"
-        )}
+        {busy ? <span className="spinner-row"><span className="spinner" /> Sending…</span> : "Send"}
       </button>
     </div>
   );

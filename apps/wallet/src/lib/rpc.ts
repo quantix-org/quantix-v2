@@ -1,13 +1,14 @@
 /**
- * JSON-RPC 2.0 client for the Quantix node.
- * Uses the browser Fetch API — no Node.js dependencies.
+ * RPC client — all requests go through /api/rpc (Next.js API route proxy)
+ * which forwards to the node and avoids CORS.
+ *
+ * Tx serialisation: amount / fee must be strings (BigInt not JSON-safe).
+ * Params MUST be an array [] per the node's JSON-RPC 2.0 implementation.
  */
 
-export interface RpcBalance {
-  address: string;
-  balance: string;
-  staked: string;
-}
+const RPC_ENDPOINT = "/api/rpc";
+
+// ── Types ────────────────────────────────────────────────────────────────────
 
 export interface RpcBlock {
   height: number;
@@ -17,103 +18,137 @@ export interface RpcBlock {
   proposer: string;
 }
 
+export interface RpcBalance {
+  address: string;
+  balance: string;  // base units as decimal string
+  staked: string;
+  nonce: number;
+}
+
 export interface RpcValidator {
-  id: string;
   address: string;
   stake: string;
   active: boolean;
 }
 
-export interface RpcMempoolEntry {
-  hash: string;
+export interface RpcTx {
   type: string;
   from: string;
+  to?: string;
   amount: string;
   fee: string;
+  nonce: number;
+  timestamp: number;
+  txHash?: string;
 }
 
-// ─── Raw RPC call ─────────────────────────────────────────────────────────────
+export interface RpcSubmitResult {
+  txHash: string;
+}
 
-let _requestId = 1;
+export interface FaucetResult {
+  txHash: string;
+  amount: string;
+  to: string;
+}
 
-async function rpcCall<T>(
-  endpoint: string,
-  method: string,
-  params: unknown[] = []
-): Promise<T> {
-  const body = JSON.stringify({
-    jsonrpc: "2.0",
-    id: _requestId++,
-    method,
-    params,
-  });
-  const res = await fetch(endpoint, {
+// ── Wire transaction for submitTx ─────────────────────────────────────────────
+
+export interface WireTx {
+  type: string;
+  chainId: string;
+  from: string;
+  nonce: number;
+  timestamp: number;
+  amount: string;
+  fee: string;
+  to?: string;
+  validatorId?: string;
+  signerPublicKey: string;
+  signature: string;
+}
+
+// ── Core fetch ───────────────────────────────────────────────────────────────
+
+async function rpcCall<T>(method: string, params: unknown[] = []): Promise<T> {
+  const res = await fetch(RPC_ENDPOINT, {
     method: "POST",
-    headers: { "content-type": "application/json" },
-    body,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
   });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const json = await res.json();
+  if (json.error) throw new Error(json.error.message ?? JSON.stringify(json.error));
+  return json.result as T;
+}
+
+// ── API calls ────────────────────────────────────────────────────────────────
+
+export async function getLatestBlock(): Promise<RpcBlock> {
+  return rpcCall<RpcBlock>("qtx_getLatestBlock");
+}
+
+export async function getBlock(height: number): Promise<RpcBlock> {
+  return rpcCall<RpcBlock>("qtx_getBlock", [height]);
+}
+
+export async function getBalance(address: string): Promise<RpcBalance> {
+  return rpcCall<RpcBalance>("qtx_getBalance", [address]);
+}
+
+export async function getValidators(): Promise<RpcValidator[]> {
+  return rpcCall<RpcValidator[]>("qtx_getValidators");
+}
+
+export async function getMempool(): Promise<RpcTx[]> {
+  return rpcCall<RpcTx[]>("qtx_getMempool");
+}
+
+export async function getNextNonce(address: string): Promise<number> {
+  const bal = await getBalance(address);
+  return bal.nonce + 1;
+}
+
+export async function submitTx(tx: WireTx): Promise<RpcSubmitResult> {
+  return rpcCall<RpcSubmitResult>("qtx_submitTransaction", [tx]);
+}
+
+export async function requestFaucet(address: string): Promise<FaucetResult> {
+  const res = await fetch("/api/faucet", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ address }),
+  });
+
+  const data = await res.json();
   if (!res.ok) {
-    throw new Error(`HTTP ${res.status} from RPC`);
+    throw new Error(data?.error?.message ?? data?.message ?? `HTTP ${res.status}`);
   }
-  const json = (await res.json()) as { result?: T; error?: { message: string } };
-  if (json.error) {
-    throw new Error(json.error.message ?? "RPC error");
-  }
-  if (json.result === undefined) {
-    throw new Error("RPC response missing result");
-  }
-  return json.result;
+  return data as FaucetResult;
 }
 
-// ─── High-level methods ───────────────────────────────────────────────────────
+// ── Signing payload (must match packages/protocol/src/transactions.ts) ────────
 
-/** Get balance and staked amounts for an address (returns strings). */
-export async function getBalance(
-  endpoint: string,
-  address: string
-): Promise<RpcBalance> {
-  return rpcCall<RpcBalance>(endpoint, "qtx_getBalance", [address]);
-}
-
-/** Get the latest finalised block. */
-export async function getLatestBlock(endpoint: string): Promise<RpcBlock> {
-  return rpcCall<RpcBlock>(endpoint, "qtx_getLatestBlock", []);
-}
-
-/** Get all validators. */
-export async function getValidators(
-  endpoint: string
-): Promise<RpcValidator[]> {
-  return rpcCall<RpcValidator[]>(endpoint, "qtx_getValidators", []);
-}
-
-/** Get pending mempool transactions. */
-export async function getMempool(
-  endpoint: string
-): Promise<RpcMempoolEntry[]> {
-  return rpcCall<RpcMempoolEntry[]>(endpoint, "qtx_getMempool", []);
-}
-
-/** Get the next nonce for an address. */
-export async function getNextNonce(
-  endpoint: string,
-  address: string
-): Promise<number> {
-  const result = await rpcCall<{ nonce: number }>(endpoint, "qtx_getBalance", [address]);
-  return result.nonce;
-}
-
-/** Submit a signed transaction. Returns tx hash on success. */
-export async function submitTx(
-  endpoint: string,
-  tx: Record<string, unknown>
-): Promise<string> {
-  const result = await rpcCall<{ txHash: string }>(endpoint, "qtx_submitTransaction", [tx]);
-  return result.txHash;
-}
-
-/** Probe connectivity — resolves true or throws. */
-export async function testConnection(endpoint: string): Promise<boolean> {
-  await getLatestBlock(endpoint);
-  return true;
+export function transactionSigningPayload(tx: {
+  chainId: string;
+  type: string;
+  from: string;
+  nonce: number;
+  timestamp: number;
+  amount: bigint;
+  fee: bigint;
+  to?: string;
+  validatorId?: string;
+}): string {
+  return JSON.stringify({
+    chainId: tx.chainId,
+    type: tx.type,
+    from: tx.from,
+    nonce: tx.nonce,
+    timestamp: tx.timestamp,
+    amount: tx.amount.toString(),
+    fee: tx.fee.toString(),
+    to: tx.to ?? null,
+    validatorId: tx.validatorId ?? null,
+  });
 }

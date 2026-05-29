@@ -1,173 +1,141 @@
-/**
- * SetupPanel — shown when no wallet is loaded.
- * Lets the user generate a new keypair or import a saved wallet file.
- */
-
-import { useCallback, useRef, useState } from "react";
+"use client";
+import { useState, useRef } from "react";
 import {
   generateKeyPair,
   walletToJson,
   parseWalletFile,
-} from "../lib/crypto";
-import type { WalletFile } from "../lib/crypto";
-import { useWallet } from "../context/WalletContext";
+  walletFileToKeyPair,
+  type WalletFile,
+} from "@/lib/crypto";
+import { useWallet } from "@/context/WalletContext";
 
-export function SetupPanel() {
-  const { setWallet } = useWallet();
-  const [generating, setGenerating] = useState(false);
+type Stage = "menu" | "generated";
+
+export default function SetupPanel() {
+  const { loadWallet } = useWallet();
+  const [stage, setStage] = useState<Stage>("menu");
   const [generated, setGenerated] = useState<WalletFile | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
-  const handleGenerate = useCallback(async () => {
-    setGenerating(true);
-    setImportError(null);
-    try {
-      // ML-DSA-87 keygen is CPU-heavy (~300 ms) — use a microtask to let the
-      // browser render the spinner before blocking.
-      await new Promise((r) => setTimeout(r, 20));
-      const kp = generateKeyPair();
-      const wf = walletToJson(kp);
-      setGenerated(wf);
-    } finally {
-      setGenerating(false);
-    }
-  }, []);
+  function handleGenerate() {
+    const kp = generateKeyPair();
+    const wf = walletToJson(kp);
+    setGenerated(wf);
+    setStage("generated");
+  }
 
-  const handleDownload = useCallback(() => {
+  function handleDownload() {
     if (!generated) return;
-    const blob = new Blob([JSON.stringify(generated, null, 2)], {
-      type: "application/json",
-    });
+    const json = JSON.stringify(generated, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `qtx-wallet-${generated.address.slice(0, 14)}.json`;
+    a.download = `${generated.address}.key.json`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [generated]);
+  }
 
-  const handleUseGenerated = useCallback(() => {
-    if (generated) setWallet(generated);
-  }, [generated, setWallet]);
+  function handleUseGenerated() {
+    if (!generated) return;
+    loadWallet(generated);
+  }
 
-  const handleImportFile = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = () => {
-        try {
-          const parsed = JSON.parse(reader.result as string);
-          const wf = parseWalletFile(parsed);
-          setWallet(wf);
-        } catch (err) {
-          setImportError(
-            err instanceof Error ? err.message : "Failed to parse wallet file"
-          );
-        }
-      };
-      reader.readAsText(file);
-    },
-    [setWallet]
-  );
-
-  const handlePasteImport = useCallback(async () => {
+  function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
     setImportError(null);
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const json = JSON.parse(ev.target?.result as string);
+        const wf = parseWalletFile(json);
+        // validate key pair is intact
+        walletFileToKeyPair(wf);
+        loadWallet(wf);
+      } catch (err) {
+        setImportError(err instanceof Error ? err.message : "Invalid wallet file");
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  function handleImportJson() {
+    setImportError(null);
+    const raw = prompt("Paste wallet JSON:");
+    if (!raw) return;
     try {
-      const text = await navigator.clipboard.readText();
-      const parsed = JSON.parse(text);
-      const wf = parseWalletFile(parsed);
-      setWallet(wf);
+      const json = JSON.parse(raw);
+      const wf = parseWalletFile(json);
+      walletFileToKeyPair(wf);
+      loadWallet(wf);
     } catch (err) {
-      setImportError(
-        err instanceof Error ? err.message : "Failed to parse clipboard content"
-      );
+      setImportError(err instanceof Error ? err.message : "Invalid wallet JSON");
     }
-  }, [setWallet]);
+  }
+
+  if (stage === "generated" && generated) {
+    return (
+      <div className="setup-panel">
+        <div className="setup-hero">
+          <div className="hero-icon">🎉</div>
+          <h1>Wallet Created</h1>
+          <p className="hero-sub">Your ML-DSA-87 post-quantum wallet is ready.</p>
+        </div>
+        <div className="card generated-card">
+          <h3>Your address</h3>
+          <div className="address-block">
+            <label>Address</label>
+            <div className="address-value">{generated.address}</div>
+          </div>
+          <div className="warning-box">
+            ⚠️ Download and save your key file now. Your private key is only stored in this session — it will be lost when you close the tab.
+          </div>
+          <div className="generated-actions">
+            <button className="btn btn-primary" onClick={handleDownload}>⬇ Download key file</button>
+            <button className="btn btn-secondary" onClick={handleUseGenerated}>Open wallet →</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => setStage("menu")}>Back</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="setup-panel">
       <div className="setup-hero">
-        <div className="hero-icon">⬡</div>
+        <div className="hero-icon">🔐</div>
         <h1>Quantix Wallet</h1>
-        <p className="hero-sub">
-          Post-quantum ML-DSA-87 · Devnet
-        </p>
+        <p className="hero-sub">Post-quantum ML-DSA-87 · Devnet</p>
       </div>
 
-      {!generated ? (
-        <div className="setup-cards">
-          {/* Generate new wallet */}
-          <div className="card setup-card">
-            <h3>New Wallet</h3>
-            <p>Generate a fresh ML-DSA-87 keypair secured by quantum-resistant cryptography.</p>
-            <button
-              className="btn btn-primary"
-              onClick={handleGenerate}
-              disabled={generating}
-            >
-              {generating ? (
-                <span className="spinner-row">
-                  <span className="spinner" /> Generating…
-                </span>
-              ) : (
-                "Generate Wallet"
-              )}
-            </button>
-            {generating && (
-              <p className="hint">This takes ~300 ms — ML-DSA-87 is thorough.</p>
-            )}
-          </div>
+      <div className="setup-cards">
+        <div className="card setup-card">
+          <h3>New wallet</h3>
+          <p>Generate a fresh ML-DSA-87 key pair. Download the key file and store it safely.</p>
+          <button className="btn btn-primary" onClick={handleGenerate}>Generate wallet</button>
+        </div>
 
-          {/* Import existing */}
-          <div className="card setup-card">
-            <h3>Import Wallet</h3>
-            <p>Load a saved <code>quantix-key/v1</code> JSON file.</p>
-            <div className="import-actions">
-              <button
-                className="btn btn-secondary"
-                onClick={() => fileInputRef.current?.click()}
-              >
-                Open File…
-              </button>
-              <button className="btn btn-secondary" onClick={handlePasteImport}>
-                Paste JSON
-              </button>
-            </div>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".json,application/json"
-              style={{ display: "none" }}
-              onChange={handleImportFile}
-            />
-            {importError && (
-              <p className="error-text">{importError}</p>
-            )}
-          </div>
-        </div>
-      ) : (
-        /* Key generated — show address and prompt to save */
-        <div className="card generated-card">
-          <h3>Wallet Generated</h3>
-          <div className="address-block">
-            <label>Address</label>
-            <code className="address-value">{generated.address}</code>
-          </div>
-          <div className="warning-box">
-            ⚠️ Download your wallet file now. The private key is <strong>never</strong> stored in the browser.
-          </div>
-          <div className="generated-actions">
-            <button className="btn btn-secondary" onClick={handleDownload}>
-              ⬇ Download Wallet File
+        <div className="card setup-card">
+          <h3>Import wallet</h3>
+          <p>Load an existing <code>.key.json</code> file or paste JSON directly.</p>
+          <div className="import-actions">
+            <button className="btn btn-secondary" onClick={() => fileRef.current?.click()}>
+              📂 Open file
             </button>
-            <button className="btn btn-primary" onClick={handleUseGenerated}>
-              Open Wallet →
-            </button>
+            <button className="btn btn-ghost" onClick={handleImportJson}>Paste JSON</button>
           </div>
+          {importError && <div className="error-text">{importError}</div>}
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".json,application/json"
+            style={{ display: "none" }}
+            onChange={handleImportFile}
+          />
         </div>
-      )}
+      </div>
     </div>
   );
 }
