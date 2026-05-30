@@ -54,6 +54,22 @@ test("parseRpcTransactionStrict rejects invalid shape", () => {
       }),
     /field 'amount' must be > 0/,
   );
+
+  assert.throws(
+    () =>
+      parseRpcTransactionStrict({
+        type: "transfer",
+        chainId: "quantix-devnet",
+        from: "qtx1abc",
+        to: "qtxContractdeadbeef",
+        nonce: 1,
+        amount: "10",
+        fee: "0",
+        signerPublicKey: "aa",
+        signature: "bb",
+      }),
+    /account address/,
+  );
 });
 
 test("parseRpcTransactionStrict emits INVALID_PARAMS code", () => {
@@ -117,4 +133,54 @@ test("enqueueValidatedTx enforces sequential nonce and conflict prevention", () 
   const tx2 = createSignedTransfer(aliceKeys, alice, bob, 2);
   enqueueValidatedTx(state, mempool, tx2, verifySignature, "quantix-devnet");
   assert.equal(mempool.length, 2);
+});
+
+test("parseRpcTransactionStrict accepts contract_call with qtxContract prefix", () => {
+  const parsed = parseRpcTransactionStrict({
+    type: "contract_call",
+    chainId: "quantix-devnet",
+    from: "qtx1abc",
+    nonce: 1,
+    amount: "1",
+    fee: "0",
+    signerPublicKey: "aa",
+    signature: "bb",
+    contractAddress: "qtxContractc0ffee",
+    method: "increment",
+    args: [1, "two"],
+    gasLimit: 200000,
+    maxFeePerGas: "10",
+    value: "0",
+  });
+
+  assert.equal(parsed.type, "contract_call");
+  assert.equal(parsed.contractAddress, "qtxContractc0ffee");
+  assert.equal(parsed.method, "increment");
+  assert.deepEqual(parsed.args, [1, "two"]);
+  assert.equal(parsed.gasLimit, 200000);
+  assert.equal(parsed.maxFeePerGas, 10n);
+});
+
+test("parseRpcTransactionStrict accepts contract_deploy with contract fields", () => {
+  const parsed = parseRpcTransactionStrict({
+    type: "contract_deploy",
+    chainId: "quantix-devnet",
+    from: "qtx1abc",
+    nonce: 1,
+    amount: "1",
+    fee: "0",
+    signerPublicKey: "aa",
+    signature: "bb",
+    contractCode: "aabbcc",
+    gasLimit: 300000,
+    maxFeePerGas: "5",
+    value: "0",
+    salt: "tenant-1",
+  });
+
+  assert.equal(parsed.type, "contract_deploy");
+  assert.equal(parsed.contractCode, "aabbcc");
+  assert.equal(parsed.gasLimit, 300000);
+  assert.equal(parsed.maxFeePerGas, 5n);
+  assert.equal(parsed.salt, "tenant-1");
 });

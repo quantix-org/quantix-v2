@@ -1,6 +1,13 @@
+import { createHash } from "node:crypto";
 import { DEFAULT_PROTOCOL_CONFIG } from "./constants.js";
 import { ensureAccount, settlePendingUnstakes, updateBlockHead } from "./state.js";
-import type { ProtocolConfig, ProtocolState, SignatureVerifier, Transaction } from "./types.js";
+import {
+  CONTRACT_ADDRESS_PREFIX,
+  type ProtocolConfig,
+  type ProtocolState,
+  type SignatureVerifier,
+  type Transaction,
+} from "./types.js";
 
 export interface ApplyResult {
   accepted: Transaction[];
@@ -54,8 +61,13 @@ export function applyTransaction(
     return signatureResult;
   }
 
-  if (tx.amount <= 0n) {
+  const amountMustBePositive = tx.type !== "contract_deploy" && tx.type !== "contract_call";
+  if (amountMustBePositive && tx.amount <= 0n) {
     return "amount must be > 0";
+  }
+
+  if (!amountMustBePositive && tx.amount < 0n) {
+    return "amount must be >= 0";
   }
 
   if (tx.fee < 0n) {
@@ -164,6 +176,73 @@ export function applyTransaction(
       }
       return true;
     }
+    case "contract_deploy": {
+      if (!tx.contractCode) {
+        return "contract_deploy requires contractCode";
+      }
+
+      const contractAddress = tx.contractAddress ?? deriveContractAddress(tx.from, tx.nonce, tx.contractCode, tx.salt);
+      if (state.contracts[contractAddress]) {
+        return "contract already deployed";
+      }
+
+      const value = tx.value ?? tx.amount;
+      if (value < 0n) {
+        return "value must be >= 0";
+      }
+
+      sender.balance -= totalDebit;
+      sender.nonce += 1;
+
+      const contract = ensureAccount(state, contractAddress);
+      contract.balance += value;
+
+      state.contracts[contractAddress] = {
+        address: contractAddress,
+        owner: tx.from,
+        codeHash: sha256Hex(tx.contractCode),
+        code: tx.contractCode,
+        deployedAtHeight: state.height + 1,
+        ...(tx.salt ? { salt: tx.salt } : {}),
+      };
+      if (!state.contractStorage[contractAddress]) {
+        state.contractStorage[contractAddress] = {};
+      }
+
+      return true;
+    }
+    case "contract_call": {
+      if (!tx.contractAddress) {
+        return "contract_call requires contractAddress";
+      }
+      if (!state.contracts[tx.contractAddress]) {
+        return "contract not found";
+      }
+
+      const value = tx.value ?? tx.amount;
+      if (value < 0n) {
+        return "value must be >= 0";
+      }
+
+      sender.balance -= totalDebit;
+      sender.nonce += 1;
+
+      const contract = ensureAccount(state, tx.contractAddress);
+      contract.balance += value;
+
+      if (!state.contractStorage[tx.contractAddress]) {
+        state.contractStorage[tx.contractAddress] = {};
+      }
+      // Temporary placeholder effect until WASM runtime is integrated.
+      state.contractStorage[tx.contractAddress].__lastCall = JSON.stringify({
+        from: tx.from,
+        method: tx.method ?? null,
+        args: tx.args ?? [],
+        value: value.toString(),
+      });
+
+      return true;
+    }
     default:
       return "unsupported transaction type";
   }
@@ -240,5 +319,27 @@ export function transactionSigningPayload(tx: Transaction): string {
     fee: tx.fee.toString(),
     to: tx.to ?? null,
     validatorId: tx.validatorId ?? null,
+    contractAddress: tx.contractAddress ?? null,
+    contractCode: tx.contractCode ?? null,
+    method: tx.method ?? null,
+    args: tx.args ?? [],
+    gasLimit: tx.gasLimit ?? null,
+    maxFeePerGas: tx.maxFeePerGas?.toString() ?? null,
+    value: tx.value?.toString() ?? null,
+    salt: tx.salt ?? null,
   });
+}
+
+export function deriveContractAddress(
+  deployer: string,
+  nonce: number,
+  contractCode: string,
+  salt?: string,
+): string {
+  const seed = `${deployer}:${nonce}:${sha256Hex(contractCode)}:${salt ?? ""}`;
+  return `${CONTRACT_ADDRESS_PREFIX}${sha256Hex(seed).slice(0, 40)}`;
+}
+
+function sha256Hex(input: string): string {
+  return createHash("sha256").update(input).digest("hex");
 }

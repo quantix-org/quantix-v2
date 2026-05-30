@@ -4,6 +4,7 @@ import {
   DEFAULT_PROTOCOL_CONFIG,
   applyBlock,
   createGenesisState,
+  deriveContractAddress,
   slashValidatorForEquivocation,
   runConsensusRound,
   transactionSigningPayload,
@@ -389,4 +390,88 @@ test("maxActiveValidators caps how many pending validators are activated per epo
   const activeAfterSecondEpoch = Object.values(state.validators).filter((v) => v.active).length;
   assert.equal(activeAfterSecondEpoch, 2, "cap prevents further activations when already at max");
   assert.equal(state.pendingValidators.length, 2, "remaining validators still queued");
+});
+
+test("deriveContractAddress is deterministic", () => {
+  const deployer = "qtx1deployer000000000000000000000000000000";
+  const code = "aabbccdd";
+
+  const a1 = deriveContractAddress(deployer, 7, code, "tenant-a");
+  const a2 = deriveContractAddress(deployer, 7, code, "tenant-a");
+  const b = deriveContractAddress(deployer, 8, code, "tenant-a");
+
+  assert.equal(a1, a2);
+  assert.notEqual(a1, b);
+  assert.ok(a1.startsWith("qtxContract"));
+});
+
+test("contract_deploy then contract_call updates contract state", () => {
+  const alice = generatePqKeyPair();
+  const aliceAddress = deriveAddressFromPublicKey(alice.publicKey);
+  const state = createGenesisState({ [aliceAddress]: 1_000n });
+
+  const verifySignature = (tx: Transaction, payload: string): true | string => {
+    if (deriveAddressFromPublicKey(tx.signerPublicKey) !== tx.from) {
+      return "signer address mismatch";
+    }
+    return verifyPqSignature(tx.signerPublicKey, payload, tx.signature)
+      ? true
+      : "invalid pq signature";
+  };
+
+  const signTx = (
+    input: Omit<Transaction, "signerPublicKey" | "signature" | "fee" | "timestamp" | "chainId"> & {
+      fee?: bigint;
+      chainId?: string;
+    },
+  ): Transaction => {
+    const unsignedTx: Transaction = {
+      chainId: DEFAULT_PROTOCOL_CONFIG.chainId,
+      fee: 0n,
+      timestamp: Date.now(),
+      ...input,
+      signerPublicKey: alice.publicKey,
+      signature: "",
+    };
+    return {
+      ...unsignedTx,
+      signature: signPqMessage(alice.privateKey, transactionSigningPayload(unsignedTx)),
+    };
+  };
+
+  const deploy = signTx({
+    type: "contract_deploy",
+    from: aliceAddress,
+    nonce: 1,
+    amount: 0n,
+    value: 0n,
+    contractCode: "aabbccdd",
+    gasLimit: 200000,
+    maxFeePerGas: 1n,
+    salt: "contract-1",
+  });
+
+  const deployResult = applyBlock(state, [deploy], DEFAULT_PROTOCOL_CONFIG, { verifySignature });
+  assert.equal(deployResult.rejected.length, 0);
+
+  const contractAddress = deriveContractAddress(aliceAddress, 1, "aabbccdd", "contract-1");
+  assert.ok(state.contracts[contractAddress]);
+
+  const call = signTx({
+    type: "contract_call",
+    from: aliceAddress,
+    nonce: 2,
+    amount: 0n,
+    value: 0n,
+    contractAddress,
+    method: "increment",
+    args: [1],
+    gasLimit: 200000,
+    maxFeePerGas: 1n,
+  });
+
+  const callResult = applyBlock(state, [call], DEFAULT_PROTOCOL_CONFIG, { verifySignature });
+  assert.equal(callResult.rejected.length, 0);
+  assert.ok(state.contractStorage[contractAddress]);
+  assert.ok(state.contractStorage[contractAddress].__lastCall);
 });

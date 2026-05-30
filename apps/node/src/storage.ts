@@ -20,6 +20,34 @@ export interface StoredValidator {
   inactiveBlocks?: number;
 }
 
+export interface StoredContract {
+  address: string;
+  owner: string;
+  codeHash: string;
+  code: string;
+  deployedAtHeight: number;
+  salt?: string;
+}
+
+export interface StoredContractReceipt {
+  txHash: string;
+  type: "contract_deploy" | "contract_call";
+  contractAddress: string;
+  success: boolean;
+  gasUsed: number;
+  blockHeight: number;
+  returnData?: string;
+  error?: string;
+}
+
+export interface StoredContractEvent {
+  txHash: string;
+  contractAddress: string;
+  name: string;
+  data: string;
+  blockHeight: number;
+}
+
 export interface StoredTx {
   hash: string;
   type: string;
@@ -65,6 +93,10 @@ export interface NodeSnapshot {
   blocks: StoredBlock[];
   pendingUnstakes: StoredPendingUnstake[];
   pendingValidators: StoredPendingValidator[];
+  contracts: Record<string, StoredContract>;
+  contractStorage: Record<string, Record<string, string>>;
+  contractReceipts: Record<string, StoredContractReceipt>;
+  contractEvents: StoredContractEvent[];
   offlineValidators: string[];
 }
 
@@ -79,6 +111,10 @@ const K = {
   block:             (height: number) => `block:${String(height).padStart(10, "0")}`,
   pendingUnstakes:   () => "array:pendingUnstakes",
   pendingValidators: () => "array:pendingValidators",
+  contracts:         () => "map:contracts",
+  contractStorage:   () => "map:contractStorage",
+  contractReceipts:  () => "map:contractReceipts",
+  contractEvents:    () => "array:contractEvents",
   offlineValidators: () => "array:offlineValidators",
 } as const;
 
@@ -131,9 +167,27 @@ export class NodeStore {
 
       const pendingUnstakes   = await this.getJson<StoredPendingUnstake[]>(K.pendingUnstakes(),   []);
       const pendingValidators = await this.getJson<StoredPendingValidator[]>(K.pendingValidators(), []);
+      const contracts         = await this.getJson<Record<string, StoredContract>>(K.contracts(), {});
+      const contractStorage   = await this.getJson<Record<string, Record<string, string>>>(K.contractStorage(), {});
+      const contractReceipts  = await this.getJson<Record<string, StoredContractReceipt>>(K.contractReceipts(), {});
+      const contractEvents    = await this.getJson<StoredContractEvent[]>(K.contractEvents(), []);
       const offlineValidators = await this.getJson<string[]>(K.offlineValidators(), []);
 
-      return { nodeId, height, lastHash, accounts, validators, blocks, pendingUnstakes, pendingValidators, offlineValidators };
+      return {
+        nodeId,
+        height,
+        lastHash,
+        accounts,
+        validators,
+        blocks,
+        pendingUnstakes,
+        pendingValidators,
+        contracts,
+        contractStorage,
+        contractReceipts,
+        contractEvents,
+        offlineValidators,
+      };
   }
 
   // ── Save (fire-and-forget, internally queued) ─────────────────────────────
@@ -169,6 +223,10 @@ export class NodeStore {
       { type: "put", key: K.lastHash(),          value: snapshot.lastHash },
       { type: "put", key: K.pendingUnstakes(),   value: JSON.stringify(snapshot.pendingUnstakes) },
       { type: "put", key: K.pendingValidators(), value: JSON.stringify(snapshot.pendingValidators) },
+      { type: "put", key: K.contracts(),         value: JSON.stringify(snapshot.contracts) },
+      { type: "put", key: K.contractStorage(),   value: JSON.stringify(snapshot.contractStorage) },
+      { type: "put", key: K.contractReceipts(),  value: JSON.stringify(snapshot.contractReceipts) },
+      { type: "put", key: K.contractEvents(),    value: JSON.stringify(snapshot.contractEvents) },
       { type: "put", key: K.offlineValidators(), value: JSON.stringify(snapshot.offlineValidators) },
     ];
 

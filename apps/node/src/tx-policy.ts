@@ -4,12 +4,17 @@ import { RpcError, RpcErrorCode } from "./rpc-errors.js";
 
 type VerifySignature = (tx: Transaction, payload: string) => true | string;
 
+const ACCOUNT_ADDRESS_PREFIX = "qtx1";
+const CONTRACT_ADDRESS_PREFIX = "qtxContract";
+
 const TX_TYPES = new Set<Transaction["type"]>([
   "transfer",
   "stake",
   "unstake",
   "validator_register",
   "validator_unregister",
+  "contract_deploy",
+  "contract_call",
 ]);
 
 export function parseRpcTransactionStrict(input: unknown): Transaction {
@@ -23,13 +28,16 @@ export function parseRpcTransactionStrict(input: unknown): Transaction {
 
   const type = mustBeTxType(candidate.type);
   const chainId = mustBeNonEmptyString(candidate.chainId, "chainId");
-  const from = mustBeAddress(candidate.from, "from");
+  const from = mustBeAccountAddress(candidate.from, "from");
   const nonce = mustBeNonce(candidate.nonce);
   const timestamp =
     typeof candidate.timestamp === "number" && candidate.timestamp > 0
       ? candidate.timestamp
       : Date.now(); // fallback for older clients
-  const amount = mustBePositiveAmount(candidate.amount);
+  const amount =
+    type === "contract_deploy" || type === "contract_call"
+      ? mustBeNonNegativeAmount(candidate.amount)
+      : mustBePositiveAmount(candidate.amount);
   const fee = mustBeNonNegativeAmount(candidate.fee);
   const signerPublicKey = mustBeHex(candidate.signerPublicKey, "signerPublicKey");
   const signature = mustBeHex(candidate.signature, "signature");
@@ -47,7 +55,7 @@ export function parseRpcTransactionStrict(input: unknown): Transaction {
   };
 
   if (type === "transfer") {
-    tx.to = mustBeAddress(candidate.to, "to");
+    tx.to = mustBeAccountAddress(candidate.to, "to");
   } else if (candidate.to !== undefined) {
     throw new Error("field 'to' is only allowed for transfer transactions");
   }
@@ -56,6 +64,29 @@ export function parseRpcTransactionStrict(input: unknown): Transaction {
     tx.validatorId = mustBeNonEmptyString(candidate.validatorId, "validatorId");
   } else if (candidate.validatorId !== undefined) {
     throw new Error("field 'validatorId' is only allowed for validator_register transactions");
+  }
+
+  if (type === "contract_deploy") {
+    tx.contractCode = mustBeHex(candidate.contractCode, "contractCode");
+    tx.gasLimit = mustBePositiveSafeInteger(candidate.gasLimit, "gasLimit");
+    tx.maxFeePerGas = mustBeNonNegativeAmount(candidate.maxFeePerGas ?? "0");
+    tx.value = mustBeNonNegativeAmount(candidate.value ?? "0");
+    if (candidate.salt !== undefined) {
+      tx.salt = mustBeNonEmptyString(candidate.salt, "salt");
+    }
+  } else if (candidate.contractCode !== undefined || candidate.salt !== undefined) {
+    throw new Error("field 'contractCode' and 'salt' are only allowed for contract_deploy transactions");
+  }
+
+  if (type === "contract_call") {
+    tx.contractAddress = mustBeContractAddress(candidate.contractAddress, "contractAddress");
+    tx.method = mustBeNonEmptyString(candidate.method, "method");
+    tx.args = mustBeArray(candidate.args ?? [], "args");
+    tx.gasLimit = mustBePositiveSafeInteger(candidate.gasLimit, "gasLimit");
+    tx.maxFeePerGas = mustBeNonNegativeAmount(candidate.maxFeePerGas ?? "0");
+    tx.value = mustBeNonNegativeAmount(candidate.value ?? "0");
+  } else if (candidate.contractAddress !== undefined || candidate.method !== undefined || candidate.args !== undefined) {
+    throw new Error("field 'contractAddress', 'method', and 'args' are only allowed for contract_call transactions");
   }
 
   return tx;
@@ -146,7 +177,7 @@ export function hashTx(tx: Transaction): string {
 
 function mustBeTxType(value: unknown): Transaction["type"] {
   if (typeof value !== "string" || !TX_TYPES.has(value as Transaction["type"])) {
-    throw new RpcError(RpcErrorCode.INVALID_PARAMS, "field 'type' must be one of transfer|stake|unstake|validator_register", {
+    throw new RpcError(RpcErrorCode.INVALID_PARAMS, "field 'type' must be one of transfer|stake|unstake|validator_register|validator_unregister|contract_deploy|contract_call", {
       category: "schema",
       field: "type",
     });
@@ -154,10 +185,32 @@ function mustBeTxType(value: unknown): Transaction["type"] {
   return value as Transaction["type"];
 }
 
-function mustBeAddress(value: unknown, field: string): string {
+function mustBeAnyAddress(value: unknown, field: string): string {
   const raw = mustBeNonEmptyString(value, field);
-  if (!raw.startsWith("qtx1")) {
+  if (!raw.startsWith(ACCOUNT_ADDRESS_PREFIX) && !raw.startsWith(CONTRACT_ADDRESS_PREFIX)) {
     throw new RpcError(RpcErrorCode.INVALID_PARAMS, `field '${field}' must be a qtx address`, {
+      category: "schema",
+      field,
+    });
+  }
+  return raw;
+}
+
+function mustBeAccountAddress(value: unknown, field: string): string {
+  const raw = mustBeAnyAddress(value, field);
+  if (!raw.startsWith(ACCOUNT_ADDRESS_PREFIX)) {
+    throw new RpcError(RpcErrorCode.INVALID_PARAMS, `field '${field}' must be an account address (${ACCOUNT_ADDRESS_PREFIX}...)`, {
+      category: "schema",
+      field,
+    });
+  }
+  return raw;
+}
+
+function mustBeContractAddress(value: unknown, field: string): string {
+  const raw = mustBeAnyAddress(value, field);
+  if (!raw.startsWith(CONTRACT_ADDRESS_PREFIX)) {
+    throw new RpcError(RpcErrorCode.INVALID_PARAMS, `field '${field}' must be a contract address (${CONTRACT_ADDRESS_PREFIX}...)`, {
       category: "schema",
       field,
     });
@@ -180,6 +233,26 @@ function mustBeNonce(value: unknown): number {
     throw new RpcError(RpcErrorCode.INVALID_PARAMS, "field 'nonce' must be a positive safe integer", {
       category: "schema",
       field: "nonce",
+    });
+  }
+  return value;
+}
+
+function mustBePositiveSafeInteger(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    throw new RpcError(RpcErrorCode.INVALID_PARAMS, `field '${field}' must be a positive safe integer`, {
+      category: "schema",
+      field,
+    });
+  }
+  return value;
+}
+
+function mustBeArray(value: unknown, field: string): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new RpcError(RpcErrorCode.INVALID_PARAMS, `field '${field}' must be an array`, {
+      category: "schema",
+      field,
     });
   }
   return value;

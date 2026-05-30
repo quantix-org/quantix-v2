@@ -699,6 +699,38 @@ interface RpcStateSnapshot {
     }
   >;
   pendingUnstakes: Array<{ owner: string; amount: string; unlockAt: number }>;
+  contracts?: Record<
+    string,
+    {
+      address: string;
+      owner: string;
+      codeHash: string;
+      code: string;
+      deployedAtHeight: number;
+      salt?: string;
+    }
+  >;
+  contractStorage?: Record<string, Record<string, string>>;
+  contractReceipts?: Record<
+    string,
+    {
+      txHash: string;
+      type: "contract_deploy" | "contract_call";
+      contractAddress: string;
+      success: boolean;
+      gasUsed: number;
+      blockHeight: number;
+      returnData?: string;
+      error?: string;
+    }
+  >;
+  contractEvents?: Array<{
+    txHash: string;
+    contractAddress: string;
+    name: string;
+    data: string;
+    blockHeight: number;
+  }>;
   offlineValidators: string[];
 }
 
@@ -780,6 +812,10 @@ function importStateSnapshot(snapshot: RpcStateSnapshot): void {
     amount: BigInt(entry.amount),
     unlockAt: entry.unlockAt,
   }));
+  state.contracts = { ...(snapshot.contracts ?? {}) };
+  state.contractStorage = { ...(snapshot.contractStorage ?? {}) };
+  state.contractReceipts = { ...(snapshot.contractReceipts ?? {}) };
+  state.contractEvents = [...(snapshot.contractEvents ?? [])];
 
   blocks.length = 0;
   for (const block of snapshot.blocks ?? []) {
@@ -1257,6 +1293,10 @@ async function loadStateFromDisk(): Promise<void> {
     owner: entry.owner,
     registeredAtHeight: entry.registeredAtHeight,
   }));
+  state.contracts = { ...snapshot.contracts };
+  state.contractStorage = { ...snapshot.contractStorage };
+  state.contractReceipts = { ...snapshot.contractReceipts };
+  state.contractEvents = [...snapshot.contractEvents];
   blocks.length = 0;
   for (const block of snapshot.blocks) {
     blocks.push(block);
@@ -1312,6 +1352,22 @@ function buildNodeSnapshot(): NodeSnapshot {
       owner: entry.owner,
       registeredAtHeight: entry.registeredAtHeight,
     })),
+    contracts: Object.fromEntries(
+      Object.entries(state.contracts).map(([address, contract]) => [
+        address,
+        {
+          address: contract.address,
+          owner: contract.owner,
+          codeHash: contract.codeHash,
+          code: contract.code,
+          deployedAtHeight: contract.deployedAtHeight,
+          ...(contract.salt ? { salt: contract.salt } : {}),
+        },
+      ]),
+    ),
+    contractStorage: structuredClone(state.contractStorage),
+    contractReceipts: structuredClone(state.contractReceipts),
+    contractEvents: [...state.contractEvents],
     offlineValidators: [...offlineValidators],
   };
 }
@@ -1351,6 +1407,10 @@ function buildStateSnapshot(): RpcStateSnapshot {
       amount: entry.amount.toString(),
       unlockAt: entry.unlockAt,
     })),
+    contracts: structuredClone(state.contracts),
+    contractStorage: structuredClone(state.contractStorage),
+    contractReceipts: structuredClone(state.contractReceipts),
+    contractEvents: [...state.contractEvents],
     offlineValidators: [...offlineValidators],
   };
 }

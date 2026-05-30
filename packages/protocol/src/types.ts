@@ -1,6 +1,16 @@
 export type Address = string;
 
-export type TxType = "transfer" | "stake" | "unstake" | "validator_register" | "validator_unregister";
+export const ACCOUNT_ADDRESS_PREFIX = "qtx1";
+export const CONTRACT_ADDRESS_PREFIX = "qtxContract";
+
+export type TxType =
+  | "transfer"
+  | "stake"
+  | "unstake"
+  | "validator_register"
+  | "validator_unregister"
+  | "contract_deploy"
+  | "contract_call";
 
 export interface Transaction {
   type: TxType;
@@ -16,6 +26,14 @@ export interface Transaction {
   signature: string;
   to?: Address;
   validatorId?: string;
+  contractAddress?: Address;
+  contractCode?: string;
+  method?: string;
+  args?: unknown[];
+  gasLimit?: number;
+  maxFeePerGas?: bigint;
+  value?: bigint;
+  salt?: string;
 }
 
 export type SignatureVerifier = (tx: Transaction, payload: string) => true | string;
@@ -41,6 +59,34 @@ export interface PendingValidatorEntry {
   id: string;
   owner: Address;
   registeredAtHeight: number;
+}
+
+export interface ContractState {
+  address: Address;
+  owner: Address;
+  codeHash: string;
+  code: string;
+  deployedAtHeight: number;
+  salt?: string;
+}
+
+export interface ContractReceipt {
+  txHash: string;
+  type: "contract_deploy" | "contract_call";
+  contractAddress: Address;
+  success: boolean;
+  gasUsed: number;
+  blockHeight: number;
+  returnData?: string;
+  error?: string;
+}
+
+export interface ContractEvent {
+  txHash: string;
+  contractAddress: Address;
+  name: string;
+  data: string;
+  blockHeight: number;
 }
 
 export interface ProtocolConfig {
@@ -69,4 +115,8 @@ export interface ProtocolState {
   }>;
   /** Validators whose registration is queued until the next epoch boundary. */
   pendingValidators: PendingValidatorEntry[];
+  contracts: Record<Address, ContractState>;
+  contractStorage: Record<Address, Record<string, string>>;
+  contractReceipts: Record<string, ContractReceipt>;
+  contractEvents: ContractEvent[];
 }

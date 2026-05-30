@@ -1,5 +1,14 @@
 import { createHash } from "node:crypto";
-import type { AccountState, Address, PendingValidatorEntry, ProtocolState, ValidatorState } from "./types.js";
+import type {
+  AccountState,
+  Address,
+  ContractEvent,
+  ContractReceipt,
+  ContractState,
+  PendingValidatorEntry,
+  ProtocolState,
+  ValidatorState,
+} from "./types.js";
 
 export function createGenesisState(initialBalances: Record<Address, bigint>): ProtocolState {
   const accounts: Record<Address, AccountState> = {};
@@ -14,11 +23,15 @@ export function createGenesisState(initialBalances: Record<Address, bigint>): Pr
 
   return {
     height: 0,
-    lastBlockHash: hashState(0, "genesis", accounts, {}, []),
+    lastBlockHash: hashState(0, "genesis", accounts, {}, [], {}, {}, {}, []),
     accounts,
     validators: {},
     pendingUnstakes: [],
     pendingValidators: [],
+    contracts: {},
+    contractStorage: {},
+    contractReceipts: {},
+    contractEvents: [],
   };
 }
 
@@ -30,6 +43,10 @@ export function cloneState(state: ProtocolState): ProtocolState {
     validators: structuredClone(state.validators),
     pendingUnstakes: structuredClone(state.pendingUnstakes),
     pendingValidators: structuredClone(state.pendingValidators),
+    contracts: structuredClone(state.contracts),
+    contractStorage: structuredClone(state.contractStorage),
+    contractReceipts: structuredClone(state.contractReceipts),
+    contractEvents: structuredClone(state.contractEvents),
   };
 }
 
@@ -66,7 +83,17 @@ export function updateBlockHead(
   validators: Record<string, ValidatorState>,
 ): void {
   state.height += 1;
-  state.lastBlockHash = hashState(state.height, `${state.lastBlockHash}:${txCount}`, state.accounts, validators, state.pendingValidators);
+  state.lastBlockHash = hashState(
+    state.height,
+    `${state.lastBlockHash}:${txCount}`,
+    state.accounts,
+    validators,
+    state.pendingValidators,
+    state.contracts,
+    state.contractStorage,
+    state.contractReceipts,
+    state.contractEvents,
+  );
 }
 
 function hashState(
@@ -75,6 +102,10 @@ function hashState(
   accounts: Record<Address, AccountState>,
   validators: Record<string, ValidatorState>,
   pending: PendingValidatorEntry[],
+  contracts: Record<Address, ContractState>,
+  contractStorage: Record<Address, Record<string, string>>,
+  contractReceipts: Record<string, ContractReceipt>,
+  contractEvents: ContractEvent[],
 ): string {
   const accountPairs = Object.entries(accounts)
     .sort(([a], [b]) => a.localeCompare(b))
@@ -91,5 +122,33 @@ function hashState(
     .map((p) => `${p.id}:${p.owner}:${p.registeredAtHeight}`)
     .join("|");
 
-  return createHash("sha256").update(`${height}:${seed}:${accountPairs}:${validatorPairs}:${pendingPairs}`).digest("hex");
+  const contractPairs = Object.entries(contracts)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([address, value]) => `${address}:${value.owner}:${value.codeHash}:${value.code}:${value.deployedAtHeight}:${value.salt ?? ""}`)
+    .join("|");
+
+  const storagePairs = Object.entries(contractStorage)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([address, storage]) => {
+      const kv = Object.entries(storage)
+        .sort(([ka], [kb]) => ka.localeCompare(kb))
+        .map(([k, v]) => `${k}=${v}`)
+        .join(",");
+      return `${address}:{${kv}}`;
+    })
+    .join("|");
+
+  const receiptPairs = Object.entries(contractReceipts)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([txHash, r]) => `${txHash}:${r.type}:${r.contractAddress}:${r.success}:${r.gasUsed}:${r.blockHeight}:${r.returnData ?? ""}:${r.error ?? ""}`)
+    .join("|");
+
+  const eventPairs = [...contractEvents]
+    .sort((a, b) => `${a.txHash}:${a.contractAddress}:${a.name}:${a.blockHeight}`.localeCompare(`${b.txHash}:${b.contractAddress}:${b.name}:${b.blockHeight}`))
+    .map((e) => `${e.txHash}:${e.contractAddress}:${e.name}:${e.data}:${e.blockHeight}`)
+    .join("|");
+
+  return createHash("sha256")
+    .update(`${height}:${seed}:${accountPairs}:${validatorPairs}:${pendingPairs}:${contractPairs}:${storagePairs}:${receiptPairs}:${eventPairs}`)
+    .digest("hex");
 }
