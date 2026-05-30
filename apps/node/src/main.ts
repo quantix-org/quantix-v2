@@ -71,6 +71,22 @@ interface PeerRef {
   rpcPort: number;
 }
 
+function parseExtraBootstrapRpcEndpoints(): string[] {
+  const raw =
+    process.env.QTX_BOOTSTRAP_RPC_ENDPOINTS ??
+    process.env.QTX_BOOTSTRAP_RPCS ??
+    "";
+
+  if (!raw.trim()) {
+    return [];
+  }
+
+  return raw
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+}
+
 // ── Build key maps for all known config-based nodes ──────────────────────────
 const allNodeConfigs: AnyNodeConfig[] = [devnetConfig.seedNode, ...devnetConfig.validators];
 const keyByValidatorId = new Map<string, ReturnType<typeof generatePqKeyPair>>();
@@ -107,14 +123,22 @@ const isSeedNode = selfConfig !== undefined && isSeedNodeConfig(selfConfig);
 // ── Peer list ─────────────────────────────────────────────────────────────────
 // External validators connect to the bootstrap nodes from genesis (not config.json).
 // Config-based nodes connect to all other config-based nodes.
+const configuredBootstrapNodes = [
+  ...genesis.network.peerDiscovery.bootstrapNodes,
+  ...parseExtraBootstrapRpcEndpoints().map((rpcEndpoint, index) => ({
+    id: `extra-bootstrap-${index + 1}`,
+    rpcEndpoint,
+  })),
+];
+
 const peerConfigs: PeerRef[] = externalSeedHex
-  ? genesis.network.peerDiscovery.bootstrapNodes
+  ? configuredBootstrapNodes
       .filter((n) => n.id !== nodeId)
       .map((n) => ({ id: n.id, rpcPort: 0 }))
   : allNodeConfigs.filter((n) => n.id !== nodeId).map((n) => ({ id: n.id, rpcPort: n.rpcPort }));
 
 const peerEndpointById = new Map<string, string>(
-  genesis.network.peerDiscovery.bootstrapNodes.map((node) => [node.id, node.rpcEndpoint]),
+  configuredBootstrapNodes.map((node) => [node.id, node.rpcEndpoint]),
 );
 
 const state = createGenesisState(
@@ -329,10 +353,25 @@ async function autoRegisterAsValidator(): Promise<void> {
   if (isSeedNode) return;
 
   // Announce our RPC endpoint to all known peers every cycle so they can contact us for consensus.
-  // This ensures the seednode re-discovers us even after a restart.
+  // This ensures the network re-discovers us even after a restart.
   const selfEndpoint = `http://127.0.0.1:${rpcPort}/rpc`;
+  const announceTargets = new Set<string>();
+
+  // Prefer currently known peer endpoints (discovered + bootstrap + active validators).
+  for (const [peerId, endpoint] of peerEndpointById) {
+    if (peerId !== selfAddress && endpoint) {
+      announceTargets.add(endpoint);
+    }
+  }
+
+  // Keep config-based local fallback for static peers in case discovery map is empty.
   for (const peer of peerConfigs) {
-    const endpoint = peerEndpointById.get(peer.id) ?? `http://127.0.0.1:${peer.rpcPort}/rpc`;
+    if (peer.rpcPort > 0) {
+      announceTargets.add(peerEndpointById.get(peer.id) ?? `http://127.0.0.1:${peer.rpcPort}/rpc`);
+    }
+  }
+
+  for (const endpoint of announceTargets) {
     rpcCall(endpoint, "qtx_announcePeer", [selfAddress, selfEndpoint], peerRpcMs).catch(() => {});
   }
 
