@@ -13,6 +13,7 @@
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
+
 const nodeRpc = process.argv[2] ?? "http://localhost:7331/rpc";
 const explorerPort = Number(process.argv[3] ?? "9933");
 
@@ -214,6 +215,14 @@ function fmtQtx(s) {
     return whole.toLocaleString() + (frac ? '.' + frac.slice(0, 6) : '') + ' QTX';
   } catch(e) { return s + ' QTX'; }
 }
+function fmtTime(ts) {
+  if (typeof ts !== 'number' || !Number.isFinite(ts) || ts <= 0) return '\u2014';
+  try {
+    return new Date(ts).toLocaleString();
+  } catch(e) {
+    return String(ts);
+  }
+}
 function esc(s) {
   return String(s == null ? '' : s)
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
@@ -339,6 +348,7 @@ function buildHome(info, h, blocks, recentTxs, validators, activeV, mempool, pee
     var b=blocks[i];
     blkRows+='<tr data-nav="/block/'+b.height+'">'
       +'<td>'+blockLink(b.height)+'</td>'
+      +'<td style="color:var(--muted);font-family:sans-serif">'+esc(fmtTime(b.timestamp))+'</td>'
       +'<td>'+addrLink(b.proposer)+'</td>'
       +'<td>'+b.txCount+'</td>'
       +'<td>'+statusBadge(b.committed)+'</td>'
@@ -351,6 +361,7 @@ function buildHome(info, h, blocks, recentTxs, validators, activeV, mempool, pee
     var t=recentTxs[j].tx;
     txRows+='<tr data-nav="/tx/'+esc(t.hash)+'">'
       +'<td>'+txLink(t.hash)+'</td>'
+      +'<td style="color:var(--muted);font-family:sans-serif">'+esc(fmtTime(t.timestamp))+'</td>'
       +'<td>'+typeBadge(t.type)+'</td>'
       +'<td>'+addrLink(t.from)+'</td>'
       +'<td>'+(t.to?addrLink(t.to):t.validatorId?addrLink(t.validatorId):'\u2014')+'</td>'
@@ -392,10 +403,10 @@ function buildHome(info, h, blocks, recentTxs, validators, activeV, mempool, pee
   return stats
     +'<div class="two-col">'
     +'<div class="card"><div class="card-head">Recent Blocks</div>'
-    +'<table class="tbl"><thead><tr><th>Height</th><th>Proposer</th><th>Txs</th><th>Status</th><th>Hash</th></tr></thead>'
+    +'<table class="tbl"><thead><tr><th>Height</th><th>Time</th><th>Proposer</th><th>Txs</th><th>Status</th><th>Hash</th></tr></thead>'
     +'<tbody>'+blkRows+'</tbody></table></div>'
     +'<div class="card"><div class="card-head">Recent Transactions</div>'
-    +'<table class="tbl"><thead><tr><th>Tx Hash</th><th>Type</th><th>From</th><th>To</th><th>Amount</th></tr></thead>'
+    +'<table class="tbl"><thead><tr><th>Tx Hash</th><th>Time</th><th>Type</th><th>From</th><th>To</th><th>Amount</th></tr></thead>'
     +'<tbody>'+txRows+'</tbody></table></div>'
     +'</div>'
     +'<div class="card"><div class="card-head">Validators'
@@ -426,12 +437,13 @@ async function renderBlock(height) {
     var maxH   = latest.height;
     var txRows='';
     if (!block.txs||!block.txs.length) {
-      txRows='<tr><td colspan="7" class="empty">No transactions in this block</td></tr>';
+      txRows='<tr><td colspan="8" class="empty">No transactions in this block</td></tr>';
     } else {
       for (var i=0;i<block.txs.length;i++) {
         var t=block.txs[i];
         txRows+='<tr data-nav="/tx/'+esc(t.hash)+'">'
           +'<td>'+txLink(t.hash)+'</td>'
+          +'<td style="color:var(--muted);font-family:sans-serif">'+esc(fmtTime(t.timestamp))+'</td>'
           +'<td>'+typeBadge(t.type)+'</td>'
           +'<td>'+addrLink(t.from)+'</td>'
           +'<td>'+(t.to?addrLink(t.to):t.validatorId?addrLink(t.validatorId):'\u2014')+'</td>'
@@ -453,12 +465,13 @@ async function renderBlock(height) {
           ? navLink('/block/'+(height-1),esc(block.parentHash),'hl')+copyBtn(block.parentHash)
           : '<span style="color:var(--muted)">genesis</span>')
       +drow('Proposer', addrLink(block.proposer,block.proposer)+copyBtn(block.proposer))
+      +drow('Timestamp', esc(fmtTime(block.timestamp)))
       +drow('Transactions', String(block.txCount))
       +drow('Status', statusBadge(block.committed))
       +'</div>'
       +'<div class="card"><div class="card-head">Transactions ('+block.txCount+')</div>'
       +'<table class="tbl"><thead><tr>'
-      +'<th>Tx Hash</th><th>Type</th><th>From</th><th>To / Validator</th><th>Amount</th><th>Fee</th><th>Nonce</th>'
+      +'<th>Tx Hash</th><th>Time</th><th>Type</th><th>From</th><th>To / Validator</th><th>Amount</th><th>Fee</th><th>Nonce</th>'
       +'</tr></thead><tbody>'+txRows+'</tbody></table></div>';
   } catch(e) {
     document.getElementById('app').innerHTML =
@@ -483,6 +496,7 @@ async function renderTx(hash) {
       +drow('From', addrLink(t.from,t.from)+copyBtn(t.from))
       +(t.to ? drow('To', addrLink(t.to,t.to)+copyBtn(t.to)) : '')
       +(t.validatorId ? drow('Validator ID', addrLink(t.validatorId,t.validatorId)+copyBtn(t.validatorId)) : '')
+      +drow('Timestamp', esc(fmtTime(t.timestamp)))
       +drow('Amount', fmtQtx(t.amount))
       +drow('Fee', fmtQtx(t.fee))
       +drow('Nonce', String(t.nonce))
@@ -522,7 +536,7 @@ async function renderAddress(addr) {
     history.reverse();
     var txRows='';
     if (!history.length) {
-      txRows='<tr><td colspan="6" class="empty">No transactions found in last 50 blocks</td></tr>';
+      txRows='<tr><td colspan="7" class="empty">No transactions found in last 50 blocks</td></tr>';
     } else {
       for (var hi=0;hi<history.length;hi++) {
         var item=history[hi];
@@ -534,6 +548,7 @@ async function renderAddress(addr) {
         txRows+='<tr data-nav="/tx/'+esc(t.hash)+'">'
           +'<td>'+txLink(t.hash)+'</td>'
           +'<td>'+blockLink(item.bh)+'</td>'
+          +'<td style="color:var(--muted);font-family:sans-serif">'+esc(fmtTime(t.timestamp))+'</td>'
           +'<td>'+typeBadge(t.type)+'</td>'
           +'<td>'+dir+'</td>'
           +'<td>'+cp+'</td>'
@@ -553,7 +568,7 @@ async function renderAddress(addr) {
       +'<div class="card"><div class="card-head">Transaction History'
       +'<span style="font-weight:400;text-transform:none;font-size:11px;margin-left:6px;color:var(--muted)">last 50 blocks</span></div>'
       +'<table class="tbl"><thead><tr>'
-      +'<th>Tx Hash</th><th>Block</th><th>Type</th><th>Dir</th><th>Counterpart</th><th>Amount</th>'
+      +'<th>Tx Hash</th><th>Block</th><th>Time</th><th>Type</th><th>Dir</th><th>Counterpart</th><th>Amount</th>'
       +'</tr></thead><tbody>'+txRows+'</tbody></table></div>';
   } catch(e) {
     document.getElementById('app').innerHTML =
