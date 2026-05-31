@@ -63,6 +63,50 @@ export interface PeerInfo {
   endpoint: string;
 }
 
+export interface ContractCodeResult {
+  address: string;
+  owner: string;
+  codeHash: string;
+  code: string;
+  deployedAtHeight: number;
+  salt: string | null;
+}
+
+export interface ContractReceiptResult {
+  txHash: string;
+  type: "contract_deploy" | "contract_call";
+  contractAddress: string;
+  success: boolean;
+  gasUsed: number;
+  blockHeight: number;
+  returnData?: string;
+  error?: string;
+}
+
+export interface ContractEventResult {
+  txHash: string;
+  contractAddress: string;
+  name: string;
+  data: string;
+  blockHeight: number;
+}
+
+export interface ContractStorageResult {
+  contractAddress: string;
+  storage?: Record<string, string>;
+  key?: string;
+  value?: string | null;
+}
+
+export interface DecodedContractCallResult {
+  success: boolean;
+  error?: string;
+  contractAddress?: string;
+  receipt?: ContractReceiptResult | null;
+  storage?: Record<string, string>;
+  decodedReturnData?: unknown;
+}
+
 /** Error thrown when the node returns a JSON-RPC error response. */
 export class RpcError extends Error {
   constructor(
@@ -98,6 +142,55 @@ export interface ValidatorRegisterParams extends BaseTxParams {
   validatorId: string;
 }
 
+export interface ContractDeployParams extends BaseTxParams {
+  contractCode: string;
+  gasLimit: number;
+  maxFeePerGas?: bigint;
+  value?: bigint;
+  salt?: string;
+  contractAddress?: string;
+}
+
+export interface ContractCallParams extends BaseTxParams {
+  contractAddress: Address;
+  method: string;
+  args?: unknown[];
+  gasLimit: number;
+  maxFeePerGas?: bigint;
+  value?: bigint;
+}
+
+export interface QtxVmV1DeployParams extends Omit<ContractDeployParams, "contractCode"> {
+  contract: QtxVmV1ContractDefinition | Record<string, QtxVmV1Instruction[]>;
+  /**
+   * Encoding strategy for contractCode.
+   * - "hex" (default): RPC-safe for qtx_sendTransaction.
+   * - "json": raw JSON string, useful for direct protocol-level tests.
+   */
+  encoding?: "hex" | "json";
+}
+
+export interface QtxVmV1CallParams extends Omit<ContractCallParams, "method" | "args"> {
+  method: string;
+  args?: unknown[];
+}
+
+export type QtxVmV1Op = "set" | "add" | "delete" | "emit" | "return";
+
+export interface QtxVmV1Instruction {
+  op: QtxVmV1Op;
+  key?: string;
+  arg?: number | string;
+  value?: unknown;
+  name?: string;
+  data?: unknown;
+}
+
+export interface QtxVmV1ContractDefinition {
+  vm: "qtx-v1";
+  methods: Record<string, QtxVmV1Instruction[]>;
+}
+
 // ─── Internal helpers ────────────────────────────────────────────────────────
 
 function sign(tx: Omit<Transaction, "signature">, privateKey: string): Transaction {
@@ -122,6 +215,14 @@ function serializeTx(tx: Transaction): Record<string, unknown> {
   };
   if (tx.to !== undefined) out.to = tx.to;
   if (tx.validatorId !== undefined) out.validatorId = tx.validatorId;
+  if (tx.contractAddress !== undefined) out.contractAddress = tx.contractAddress;
+  if (tx.contractCode !== undefined) out.contractCode = tx.contractCode;
+  if (tx.method !== undefined) out.method = tx.method;
+  if (tx.args !== undefined) out.args = tx.args;
+  if (tx.gasLimit !== undefined) out.gasLimit = tx.gasLimit;
+  if (tx.maxFeePerGas !== undefined) out.maxFeePerGas = tx.maxFeePerGas.toString();
+  if (tx.value !== undefined) out.value = tx.value.toString();
+  if (tx.salt !== undefined) out.salt = tx.salt;
   return out;
 }
 
@@ -151,6 +252,71 @@ async function rpcCall<T>(endpoint: string, method: string, params: unknown[]): 
   }
 
   return json.result as T;
+}
+
+/**
+ * Decode returnData from native contract runtime.
+ * - Empty string => null
+ * - JSON object/array => parsed object
+ * - Integer string => bigint
+ * - Other => raw string
+ */
+export function decodeContractReturnData(returnData: string | undefined | null): unknown {
+  if (returnData === undefined || returnData === null) return undefined;
+  const raw = String(returnData);
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+    try {
+      return JSON.parse(trimmed) as unknown;
+    } catch {
+      // Fall through to string decoding.
+    }
+  }
+
+  if (/^-?\d+$/.test(trimmed)) {
+    try {
+      return BigInt(trimmed);
+    } catch {
+      // Fall through to string decoding.
+    }
+  }
+
+  return raw;
+}
+
+/** Encode arbitrary UTF-8 text as lowercase hex for RPC-safe contract deploys. */
+export function encodeUtf8Hex(value: string): string {
+  return Buffer.from(value, "utf8").toString("hex");
+}
+
+/** Decode lowercase/uppercase hex into UTF-8 text. */
+export function decodeUtf8Hex(hex: string): string {
+  return Buffer.from(hex, "hex").toString("utf8");
+}
+
+/** Build the canonical qtx-v1 contract definition object. */
+export function createQtxVmV1Contract(methods: Record<string, QtxVmV1Instruction[]>): QtxVmV1ContractDefinition {
+  return {
+    vm: "qtx-v1",
+    methods,
+  };
+}
+
+/** Serialize a qtx-v1 contract definition into the JSON payload understood by the protocol. */
+export function stringifyQtxVmV1Contract(
+  contract: QtxVmV1ContractDefinition | Record<string, QtxVmV1Instruction[]>,
+): string {
+  const normalized = "vm" in contract ? contract : createQtxVmV1Contract(contract);
+  return JSON.stringify(normalized);
+}
+
+/** Serialize a qtx-v1 contract and encode it as hex for JSON-RPC submission. */
+export function encodeQtxVmV1ContractHex(
+  contract: QtxVmV1ContractDefinition | Record<string, QtxVmV1Instruction[]>,
+): string {
+  return encodeUtf8Hex(stringifyQtxVmV1Contract(contract));
 }
 
 // ─── Transaction builders ─────────────────────────────────────────────────────
@@ -237,6 +403,94 @@ export function buildValidatorRegisterTx(params: ValidatorRegisterParams): Trans
   );
 }
 
+/**
+ * Build and sign a contract_deploy transaction.
+ */
+export function buildContractDeployTx(params: ContractDeployParams): Transaction {
+  return sign(
+    {
+      chainId: params.chainId,
+      type: "contract_deploy",
+      from: params.from,
+      nonce: params.nonce,
+      timestamp: Date.now(),
+      amount: params.amount,
+      fee: params.fee ?? 0n,
+      signerPublicKey: params.signerPublicKey,
+      contractCode: params.contractCode,
+      gasLimit: params.gasLimit,
+      maxFeePerGas: params.maxFeePerGas ?? 0n,
+      value: params.value ?? params.amount,
+      ...(params.salt !== undefined ? { salt: params.salt } : {}),
+      ...(params.contractAddress !== undefined ? { contractAddress: params.contractAddress } : {}),
+    },
+    params.privateKey,
+  );
+}
+
+/**
+ * Build and sign a qtx-v1 contract_deploy transaction.
+ * Defaults to hex encoding so payload is accepted by strict RPC policy.
+ */
+export function buildQtxVmV1DeployTx(params: QtxVmV1DeployParams): Transaction {
+  const normalized = "vm" in params.contract ? params.contract : createQtxVmV1Contract(params.contract);
+  const contractCode = params.encoding === "json"
+    ? stringifyQtxVmV1Contract(normalized)
+    : encodeQtxVmV1ContractHex(normalized);
+
+  return buildContractDeployTx({
+    ...params,
+    contractCode,
+  });
+}
+
+/**
+ * Build and sign a contract_call transaction.
+ */
+export function buildContractCallTx(params: ContractCallParams): Transaction {
+  return sign(
+    {
+      chainId: params.chainId,
+      type: "contract_call",
+      from: params.from,
+      nonce: params.nonce,
+      timestamp: Date.now(),
+      amount: params.amount,
+      fee: params.fee ?? 0n,
+      signerPublicKey: params.signerPublicKey,
+      contractAddress: params.contractAddress,
+      method: params.method,
+      args: params.args ?? [],
+      gasLimit: params.gasLimit,
+      maxFeePerGas: params.maxFeePerGas ?? 0n,
+      value: params.value ?? params.amount,
+    },
+    params.privateKey,
+  );
+}
+
+/**
+ * Build and sign a qtx-v1 contract_call transaction.
+ * This is a thin convenience wrapper over buildContractCallTx.
+ */
+export function buildQtxVmV1CallTx(params: QtxVmV1CallParams): Transaction {
+  return buildContractCallTx({
+    ...params,
+    args: params.args ?? [],
+  });
+}
+
+/**
+ * Convenience helper for read-only qtx-v1 method simulation with decoded returnData.
+ */
+export async function callQtxVmV1Decoded(
+  rpcEndpoint: string,
+  params: QtxVmV1CallParams,
+): Promise<DecodedContractCallResult> {
+  const tx = buildQtxVmV1CallTx(params);
+  return callContractDecoded(rpcEndpoint, tx);
+}
+
 // ─── Chain queries ───────────────────────────────────────────────────────────
 
 /**
@@ -309,6 +563,107 @@ export async function getMempool(rpcEndpoint: string): Promise<MempoolEntry[]> {
  */
 export async function getPeers(rpcEndpoint: string): Promise<PeerInfo[]> {
   return rpcCall<PeerInfo[]>(rpcEndpoint, "qtx_getPeers", []);
+}
+
+/**
+ * Fetch deployed contract metadata and code.
+ */
+export async function getCode(rpcEndpoint: string, contractAddress: Address): Promise<ContractCodeResult> {
+  return rpcCall<ContractCodeResult>(rpcEndpoint, "qtx_getCode", [contractAddress]);
+}
+
+/**
+ * Fetch a contract execution receipt by transaction hash.
+ */
+export async function getReceipt(rpcEndpoint: string, txHash: string): Promise<ContractReceiptResult> {
+  return rpcCall<ContractReceiptResult>(rpcEndpoint, "qtx_getReceipt", [txHash]);
+}
+
+/**
+ * Fetch all contract receipts in a block.
+ */
+export async function getReceiptsByBlock(rpcEndpoint: string, blockHeight: number): Promise<ContractReceiptResult[]> {
+  return rpcCall<ContractReceiptResult[]>(rpcEndpoint, "qtx_getReceiptsByBlock", [blockHeight]);
+}
+
+/**
+ * Fetch contract events with optional filters.
+ */
+export async function getEvents(
+  rpcEndpoint: string,
+  contractAddress: Address,
+  fromHeight: number = 0,
+  toHeight: number = Number.MAX_SAFE_INTEGER,
+  name?: string,
+): Promise<ContractEventResult[]> {
+  return rpcCall<ContractEventResult[]>(rpcEndpoint, "qtx_getEvents", [contractAddress, fromHeight, toHeight, name]);
+}
+
+/**
+ * Fetch contract storage. If key is omitted, returns full storage map.
+ */
+export async function getStorage(
+  rpcEndpoint: string,
+  contractAddress: Address,
+  key?: string,
+): Promise<ContractStorageResult> {
+  return rpcCall<ContractStorageResult>(rpcEndpoint, "qtx_getStorage", [contractAddress, key]);
+}
+
+/**
+ * Estimate gas for contract deploy/call transactions.
+ */
+export async function estimateGas(
+  rpcEndpoint: string,
+  tx: Transaction,
+): Promise<{ gasEstimate: number }> {
+  return rpcCall<{ gasEstimate: number }>(rpcEndpoint, "qtx_estimateGas", [serializeTx(tx)]);
+}
+
+/**
+ * Read-only contract call simulation (no state commit).
+ */
+export async function callContract(
+  rpcEndpoint: string,
+  tx: Transaction,
+): Promise<{
+  success: boolean;
+  error?: string;
+  contractAddress?: string;
+  receipt?: ContractReceiptResult | null;
+  storage?: Record<string, string>;
+}> {
+  return rpcCall(rpcEndpoint, "qtx_call", [serializeTx(tx)]);
+}
+
+/**
+ * Read-only contract simulation with decoded returnData convenience field.
+ */
+export async function callContractDecoded(
+  rpcEndpoint: string,
+  tx: Transaction,
+): Promise<DecodedContractCallResult> {
+  const result = await callContract(rpcEndpoint, tx);
+  return {
+    ...result,
+    decodedReturnData: decodeContractReturnData(result.receipt?.returnData),
+  };
+}
+
+/**
+ * Fetch contract transactions from committed blocks with optional filtering.
+ */
+export async function getContractTransactions(
+  rpcEndpoint: string,
+  contractAddress: Address = "",
+  fromHeight: number = 0,
+  toHeight: number = Number.MAX_SAFE_INTEGER,
+): Promise<Array<Record<string, unknown>>> {
+  return rpcCall<Array<Record<string, unknown>>>(
+    rpcEndpoint,
+    "qtx_getContractTransactions",
+    [contractAddress, fromHeight, toHeight],
+  );
 }
 
 /**
