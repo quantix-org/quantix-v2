@@ -14,6 +14,9 @@
  *   stake      <amount>     --key <f> [options]     Stake QTX
  *   unstake    <amount>     --key <f> [options]     Unstake QTX
  *   validator  register <amount> --key <f>           Register as validator
+ *   contract   deploy-v1 <file> --key <f> [options]  Deploy qtx-v1 contract
+ *   contract   call <addr> <method> [args-json]      Send contract_call tx
+ *   contract   simulate <addr> <method> [args-json]  qtx_call simulation
  *   block      <height|latest> [--rpc <url>]        Look up a block
  *   tx         <hash>         [--rpc <url>]         Look up a transaction
  *   chain      [--rpc <url>]                        Show chain info
@@ -46,6 +49,9 @@ import {
   buildStakeTx,
   buildUnstakeTx,
   buildValidatorRegisterTx,
+  buildQtxVmV1DeployTx,
+  buildQtxVmV1CallTx,
+  callQtxVmV1Decoded,
   RpcError,
 } from "@quantix/sdk";
 
@@ -127,6 +133,36 @@ function formatQtx(amount: bigint): string {
 
 function formatQtxFull(amount: bigint): string {
   return `${formatQtx(amount)} ${gray(`(${amount.toLocaleString()} base)`)}`;
+}
+
+function parseSafeInt(input: string | undefined, fallback: number): number {
+  if (!input) return fallback;
+  const n = Number(input);
+  if (!Number.isSafeInteger(n) || n <= 0) {
+    die(`Invalid positive integer: ${input}`);
+  }
+  return n;
+}
+
+function parseJsonArrayArg(raw: string | undefined): unknown[] {
+  if (!raw || !raw.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      die("Contract args must be a JSON array, e.g. '[\"hello\",123]'");
+    }
+    return parsed;
+  } catch {
+    die("Invalid args JSON. Example: '[\"hello\",123]'");
+  }
+}
+
+function safeJson(value: unknown): string {
+  try {
+    return JSON.stringify(value, (_k, v) => (typeof v === "bigint" ? v.toString() : v));
+  } catch {
+    return String(value);
+  }
 }
 
 // ─── Argument parser ─────────────────────────────────────────────────────────
@@ -460,6 +496,164 @@ async function cmdValidator(args: Args) {
   }
 }
 
+// qtx contract deploy-v1 <contract-json-file> --key <file> [--gas <int>] [--max-fee-per-gas <qtx>] [--value <qtx>] [--salt <text>] [--encoding hex|json]
+// qtx contract call <contract-address> <method> [args-json] --key <file> [--gas <int>] [--max-fee-per-gas <qtx>] [--value <qtx>]
+// qtx contract simulate <contract-address> <method> [args-json] --key <file> [--gas <int>] [--max-fee-per-gas <qtx>] [--value <qtx>]
+async function cmdContract(args: Args) {
+  const sub = args.positional[0];
+  if (!sub) {
+    die("Usage: qtx contract <deploy-v1|call|simulate> ...");
+  }
+
+  const kf = loadKey(args.key);
+
+  if (sub === "deploy-v1") {
+    const filePath = args.positional[1];
+    if (!filePath) {
+      die("Usage: qtx contract deploy-v1 <contract-json-file> --key <file> [--gas 320000] [--salt <text>]");
+    }
+
+    let contractDefinition: unknown;
+    try {
+      contractDefinition = JSON.parse(readFileSync(filePath, "utf8")) as unknown;
+    } catch {
+      die(`Could not parse contract JSON file: ${filePath}`);
+    }
+
+    const gasLimit = parseSafeInt(args.raw["gas"], 320000);
+    const maxFeePerGas = parseQtx(args.raw["max-fee-per-gas"] ?? "0");
+    const value = parseQtx(args.raw["value"] ?? "0");
+    const salt = args.raw["salt"] ?? `qtx-v1-${Date.now()}`;
+    const encoding = args.raw["encoding"] === "json" ? "json" : "hex";
+
+    header("Deploy qtx-v1 Contract");
+    row("From", cyan(kf.address));
+    row("File", filePath);
+    row("Gas", String(gasLimit));
+    row("Encoding", encoding);
+    row("Salt", salt);
+    separator();
+
+    try {
+      const nonce = await getNextNonce(args.rpc, kf.address);
+      const tx = buildQtxVmV1DeployTx({
+        chainId: args.chainId,
+        from: kf.address,
+        nonce,
+        amount: 0n,
+        fee: args.fee,
+        signerPublicKey: kf.publicKey,
+        privateKey: kf.privateKey,
+        contract: contractDefinition as any,
+        encoding,
+        gasLimit,
+        maxFeePerGas,
+        value,
+        salt,
+      });
+      const { txHash } = await submitTx(args.rpc, tx);
+      success("Contract deploy submitted!");
+      row("Tx Hash", yellow(txHash));
+      row("Nonce", String(nonce));
+      console.log();
+    } catch (e) {
+      handleRpcError(e);
+    }
+    return;
+  }
+
+  const contractAddress = args.positional[1];
+  const method = args.positional[2];
+  const argsJson = args.positional[3];
+  if (!contractAddress || !method) {
+    die(`Usage: qtx contract ${sub} <contract-address> <method> [args-json] --key <file>`);
+  }
+  if (!contractAddress.startsWith("qtxContract")) {
+    die("contract-address must start with qtxContract");
+  }
+
+  const callArgs = parseJsonArrayArg(argsJson);
+  const gasLimit = parseSafeInt(args.raw["gas"], 300000);
+  const maxFeePerGas = parseQtx(args.raw["max-fee-per-gas"] ?? "0");
+  const value = parseQtx(args.raw["value"] ?? "0");
+
+  if (sub === "call") {
+    header("Contract Call");
+    row("From", cyan(kf.address));
+    row("Contract", cyan(contractAddress));
+    row("Method", magenta(method));
+    row("Args", JSON.stringify(callArgs));
+    separator();
+
+    try {
+      const nonce = await getNextNonce(args.rpc, kf.address);
+      const tx = buildQtxVmV1CallTx({
+        chainId: args.chainId,
+        from: kf.address,
+        nonce,
+        amount: 0n,
+        fee: args.fee,
+        signerPublicKey: kf.publicKey,
+        privateKey: kf.privateKey,
+        contractAddress,
+        method,
+        args: callArgs,
+        gasLimit,
+        maxFeePerGas,
+        value,
+      });
+      const { txHash } = await submitTx(args.rpc, tx);
+      success("Contract call submitted!");
+      row("Tx Hash", yellow(txHash));
+      row("Nonce", String(nonce));
+      console.log();
+    } catch (e) {
+      handleRpcError(e);
+    }
+    return;
+  }
+
+  if (sub === "simulate") {
+    header("Contract Simulation (qtx_call)");
+    row("From", cyan(kf.address));
+    row("Contract", cyan(contractAddress));
+    row("Method", magenta(method));
+    row("Args", JSON.stringify(callArgs));
+    separator();
+
+    try {
+      const nonce = await getNextNonce(args.rpc, kf.address);
+      const result = await callQtxVmV1Decoded(args.rpc, {
+        chainId: args.chainId,
+        from: kf.address,
+        nonce,
+        amount: 0n,
+        fee: args.fee,
+        signerPublicKey: kf.publicKey,
+        privateKey: kf.privateKey,
+        contractAddress,
+        method,
+        args: callArgs,
+        gasLimit,
+        maxFeePerGas,
+        value,
+      });
+
+      row("Success", result.success ? green("true") : red("false"));
+      if (result.error) row("Error", red(result.error));
+      row("Decoded Return", result.decodedReturnData === undefined ? gray("undefined") : safeJson(result.decodedReturnData));
+      if (result.receipt?.gasUsed !== undefined) row("Gas Used", String(result.receipt.gasUsed));
+      if (result.storage) row("Storage Keys", String(Object.keys(result.storage).length));
+      console.log();
+    } catch (e) {
+      handleRpcError(e);
+    }
+    return;
+  }
+
+  die("Usage: qtx contract <deploy-v1|call|simulate> ...");
+}
+
 // qtx block <height|latest> [--rpc <url>]
 async function cmdBlock(args: Args) {
   let heightArg = args.positional[0];
@@ -630,6 +824,9 @@ ${bold(cyan("  ⬡  Quantix Wallet CLI"))}  ${gray("— post-quantum blockchain 
     ${cyan("qtx stake")}         ${cyan("<amount>")}     ${gray("--key <f> [options]")} Stake QTX
     ${cyan("qtx unstake")}       ${cyan("<amount>")}     ${gray("--key <f> [options]")} Unstake QTX
     ${cyan("qtx validator")}     ${cyan("register <amount>")}       ${gray("--key <f>")}  Register validator
+    ${cyan("qtx contract deploy-v1")} ${cyan("<file>")} ${gray("--key <f> [--gas N] [--salt text]")} Deploy qtx-v1
+    ${cyan("qtx contract call")}      ${cyan("<addr> <method> [args-json]")} ${gray("--key <f>")} Send contract_call
+    ${cyan("qtx contract simulate")}  ${cyan("<addr> <method> [args-json]")} ${gray("--key <f>")} qtx_call + decode
 
   ${bold("Chain queries")}
     ${cyan("qtx block")}         ${cyan("<height|latest>")} ${gray("[--rpc <url>]")}    Block details + txs
@@ -662,6 +859,15 @@ ${bold(cyan("  ⬡  Quantix Wallet CLI"))}  ${gray("— post-quantum blockchain 
 
     ${dim("# Register as validator (minimum stake: 32 QTX)")}
     tsx tools/wallet/qtx.ts validator register 32 --key my-wallet.key.json
+
+    ${dim("# Deploy qtx-v1 contract from JSON file")}
+    tsx tools/wallet/qtx.ts contract deploy-v1 ./contract.json --key my-wallet.key.json --gas 320000
+
+    ${dim("# Call qtx-v1 method")}
+    tsx tools/wallet/qtx.ts contract call qtxContract... setValue '[123]' --key my-wallet.key.json
+
+    ${dim("# Simulate qtx-v1 method (readonly)")}
+    tsx tools/wallet/qtx.ts contract simulate qtxContract... getValue '[]' --key my-wallet.key.json
 `);
 }
 
@@ -713,6 +919,7 @@ async function main() {
     case "stake":      await cmdStake(args);    break;
     case "unstake":    await cmdUnstake(args);  break;
     case "validator":  await cmdValidator(args);break;
+    case "contract":   await cmdContract(args); break;
     case "block":      await cmdBlock(args);    break;
     case "tx":         await cmdTx(args);       break;
     case "chain":      await cmdChain(args);    break;

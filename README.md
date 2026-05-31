@@ -536,6 +536,9 @@ import {
   generateKeyPair,
   deriveAddress,
   buildTransferTx,
+  buildQtxVmV1DeployTx,
+  buildQtxVmV1CallTx,
+  callQtxVmV1Decoded,
   buildStakeTx,
   buildValidatorRegisterTx,
   getBalance,
@@ -571,6 +574,57 @@ const tx = buildTransferTx({
 });
 const { txHash } = await submitTx(RPC, tx);
 
+// Build and submit a qtx-v1 contract deploy (RPC-safe hex by default)
+const deployTx = buildQtxVmV1DeployTx({
+  chainId: "quantix-devnet",
+  from: address,
+  nonce: nextNonce + 1,
+  amount: 0n,
+  signerPublicKey: keys.publicKey,
+  privateKey: keys.privateKey,
+  gasLimit: 220000,
+  maxFeePerGas: 1n,
+  value: 0n,
+  salt: "hello-contract",
+  contract: {
+    hello: [{ op: "return", value: "world" }],
+  },
+});
+await submitTx(RPC, deployTx);
+
+// Call a qtx-v1 method
+const callTx = buildQtxVmV1CallTx({
+  chainId: "quantix-devnet",
+  from: address,
+  nonce: nextNonce + 2,
+  amount: 0n,
+  signerPublicKey: keys.publicKey,
+  privateKey: keys.privateKey,
+  contractAddress: "qtxContract...",
+  method: "hello",
+  args: ["quantix"],
+  gasLimit: 200000,
+  maxFeePerGas: 1n,
+  value: 0n,
+});
+await submitTx(RPC, callTx);
+
+// Simulate qtx-v1 call (no state commit) and auto-decode returnData
+const simulated = await callQtxVmV1Decoded(RPC, {
+  chainId: "quantix-devnet",
+  from: address,
+  nonce: nextNonce + 3,
+  amount: 0n,
+  signerPublicKey: keys.publicKey,
+  privateKey: keys.privateKey,
+  contractAddress: "qtxContract...",
+  method: "getValue",
+  gasLimit: 200000,
+  maxFeePerGas: 1n,
+  value: 0n,
+});
+console.log(simulated.decodedReturnData);
+
 // Handle RPC errors
 try {
   await submitTx(RPC, tx);
@@ -589,8 +643,14 @@ try {
 | `buildStakeTx(params)` | `stake` | Stake QTX |
 | `buildUnstakeTx(params)` | `unstake` | Unstake QTX |
 | `buildValidatorRegisterTx(params)` | `validator_register` | Register a validator |
+| `buildContractDeployTx(params)` | `contract_deploy` | Deploy raw contract payload |
+| `buildQtxVmV1DeployTx(params)` | `contract_deploy` | Deploy qtx-v1 user-defined contract |
+| `buildContractCallTx(params)` | `contract_call` | Call deployed contract method |
+| `buildQtxVmV1CallTx(params)` | `contract_call` | Call qtx-v1 user-defined method |
 
 All builders return a fully signed `Transaction` ready to pass to `submitTx`.
+
+For qtx-v1 schema, opcode set, deploy validation, and gas rules see `docs/qtx-v1-smart-contracts.md`.
 
 ---
 
