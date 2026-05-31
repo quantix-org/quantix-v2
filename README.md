@@ -17,20 +17,22 @@ Quantix V2 is a research-grade, full-stack blockchain prototype built entirely i
 3. [Project Structure](#project-structure)
 4. [Prerequisites](#prerequisites)
 5. [Quick Start — 4-Node Devnet](#quick-start--4-node-devnet)
-6. [Running a Single Node](#running-a-single-node)
-7. [Multi-Node Devnets](#multi-node-devnets)
-8. [Permissionless Validator Joining](#permissionless-validator-joining)
-9. [Block Explorer](#block-explorer)
-10. [Wallet CLI](#wallet-cli)
-11. [Transaction Types](#transaction-types)
-12. [JSON-RPC API](#json-rpc-api)
-13. [RPC Error Codes](#rpc-error-codes)
-14. [Environment Variables](#environment-variables)
-15. [SDK Usage](#sdk-usage)
-16. [Protocol Constants](#protocol-constants)
-17. [Tests](#tests)
-18. [npm Scripts](#npm-scripts)
-19. [Genesis File Format](#genesis-file-format)
+6. [Quick Start — Smart Contract + Wallet Extension](#quick-start--smart-contract--wallet-extension)
+7. [Running a Single Node](#running-a-single-node)
+8. [Multi-Node Devnets](#multi-node-devnets)
+9. [Permissionless Validator Joining](#permissionless-validator-joining)
+10. [Block Explorer](#block-explorer)
+11. [Wallet CLI](#wallet-cli)
+12. [Browser Wallet Extension](#browser-wallet-extension)
+13. [Transaction Types](#transaction-types)
+14. [JSON-RPC API](#json-rpc-api)
+15. [RPC Error Codes](#rpc-error-codes)
+16. [Environment Variables](#environment-variables)
+17. [SDK Usage](#sdk-usage)
+18. [Protocol Constants](#protocol-constants)
+19. [Tests](#tests)
+20. [npm Scripts](#npm-scripts)
+21. [Genesis File Format](#genesis-file-format)
 
 ---
 
@@ -38,11 +40,12 @@ Quantix V2 is a research-grade, full-stack blockchain prototype built entirely i
 
 - **Post-quantum signatures** — ML-DSA-87 (Dilithium5) via [`@noble/post-quantum`](https://github.com/paulmillr/noble-post-quantum)
 - **BFT consensus** — `qtx-bft` with `floor(2n/3)+1` quorum, equivocation slashing (10%), missed-block slash threshold (3)
-- **Four transaction types** — transfer, stake, unstake, validator_register
+- **Six transaction types** — transfer, stake, unstake, validator_register, contract_deploy, contract_call
 - **Permissionless validator joining** — any node can join with `QTX_SEED_HEX` without being listed in config
 - **JSON-RPC 2.0 API** — complete, deterministic error codes
 - **Block explorer** — Etherscan-like SPA (dark theme, live refresh, block/tx/address/validator views)
 - **Wallet CLI** — full-featured terminal wallet (`qtx`)
+- **Browser wallet extension** — provider API, popup wallet, options page, and token-focused test dApp
 - **TypeScript SDK** — `@quantix/sdk` for building apps and integrations
 - **Monorepo** — npm workspaces, strict TypeScript, shared packages
 
@@ -168,11 +171,78 @@ npm install
 # Start 4-validator devnet (alice :7341, bob :7342, carol :7343, dave :7344)
 npm run dev:devnet4
 
-# In a second terminal — open the block explorer
-npm run explorer:devnet4
+# In a second terminal — open the block explorer for validator-alice (7341)
+npm run explorer -- http://localhost:7341/rpc 8080
 ```
 
 Explorer opens at **http://localhost:8080** — blocks appear every 4 seconds.
+
+---
+
+## Quick Start — Smart Contract + Wallet Extension
+
+This flow gives you an end-to-end local loop: run devnet, deploy native token contract, load extension, and test token methods from browser UI.
+
+### 1) Start local chain
+
+```bash
+npm install
+npm run dev:devnet
+```
+
+### 2) Build and load browser extension
+
+```bash
+npm run wallet:ext:build
+```
+
+Load unpacked extension from:
+
+```text
+apps/wallet-extension/dist
+```
+
+### 3) Deploy and initialize a native token contract
+
+```bash
+npx tsx tools/contract-test/deploy-native-token.ts \
+  --key mywallet1.key.json \
+  --name "Quantix Test Token" \
+  --symbol "QTT" \
+  --decimals 18 \
+  --supply 1000000 \
+  --rpc http://127.0.0.1:7330/rpc \
+  --salt qtt-token-quickstart
+```
+
+Save the printed contract address (`qtxContract...`) for the next steps.
+
+### 4) Run the extension test dApp
+
+```bash
+cd apps/wallet-extension/test-dapp
+python3 -m http.server 5501
+```
+
+Open `http://127.0.0.1:5501` and run:
+
+- `quantix_connect`
+- `quantix_getActiveAddress`
+- Token Tester read suite (`token_total_supply`, `token_balance_of`, `token_allowance`)
+- Token write calls (`token_transfer`, `token_approve`, `token_transfer_from`, `token_mint`, `token_burn`)
+
+### 5) Verify from CLI (optional)
+
+```bash
+npm run qtx -- contract simulate qtxContractYOURADDR token_total_supply '[]' --key mywallet1.key.json --rpc http://127.0.0.1:7330/rpc
+npm run qtx -- contract simulate qtxContractYOURADDR token_balance_of '["qtx1YOURADDR"]' --key mywallet1.key.json --rpc http://127.0.0.1:7330/rpc
+```
+
+### Notes
+
+- For `token_init`, argument order is `name, symbol, decimals, initialSupply, owner`.
+- Amounts for token methods are base units (18 decimals by default).
+- The CLI default RPC is `http://127.0.0.1:7330/rpc`.
 
 ---
 
@@ -261,14 +331,14 @@ The node auto-submits a `validator_register` transaction and joins the active va
 A lightweight Etherscan-inspired SPA served directly from the explorer process.
 
 ```bash
-# Point at 4-node devnet
-npm run explorer:devnet4
-
-# Point at 3-node devnet
+# Preset script (remote devnet endpoint)
 npm run explorer:devnet
 
-# Custom RPC endpoint and port
+# Local 4-node devnet (validator-alice)
 npm run explorer -- http://localhost:7341/rpc 9090
+
+# Local 3-node devnet
+npm run explorer -- http://localhost:7331/rpc 8080
 ```
 
 Default URL: **http://localhost:8080**
@@ -293,7 +363,7 @@ The page auto-refreshes every **4 seconds** and shows a live status indicator.
 npm run qtx -- <command> [options]
 ```
 
-All commands default to `--rpc http://localhost:7331/rpc` and `--key ./wallet.key.json`.
+All commands default to `--rpc http://127.0.0.1:7330/rpc` and `--key ./wallet.key.json`.
 
 ### Commands
 
@@ -306,7 +376,10 @@ All commands default to `--rpc http://localhost:7331/rpc` and `--key ./wallet.ke
 | `send <to> <amount>` | Transfer QTX to another address |
 | `stake <amount>` | Stake QTX (self-delegation) |
 | `unstake <amount>` | Unstake QTX (subject to cooldown) |
-| `validator register <id> <amount>` | Register as a validator with a given stake |
+| `validator register <amount>` | Register as validator using active address as validator ID |
+| `contract deploy-v1 <file>` | Deploy qtx-v1 contract JSON |
+| `contract call <addr> <method> [args-json]` | Submit `contract_call` transaction |
+| `contract simulate <addr> <method> [args-json]` | Simulate read-only `qtx_call` and decode return |
 | `block <height\|latest>` | Look up a block by height or `latest` |
 | `tx <hash>` | Look up a transaction by hash |
 | `chain` | Show chain info (chainId, height, validators, etc.) |
@@ -317,7 +390,7 @@ All commands default to `--rpc http://localhost:7331/rpc` and `--key ./wallet.ke
 
 | Flag | Default | Description |
 |---|---|---|
-| `--rpc <url>` | `http://localhost:7331/rpc` | Node RPC endpoint |
+| `--rpc <url>` | `http://127.0.0.1:7330/rpc` | Node RPC endpoint |
 | `--key <file>` | `./wallet.key.json` | Path to wallet keyfile |
 | `--fee <qtx>` | `0` | Fee to attach to the transaction |
 | `--output <file>` | `./wallet.key.json` | Output path for `new` / `import` |
@@ -338,7 +411,7 @@ npm run qtx -- send qtx1recipient... 10 --key ~/.qtx/wallet.key.json
 npm run qtx -- stake 50 --key ~/.qtx/wallet.key.json
 
 # Register as a validator with 32 QTX stake
-npm run qtx -- validator register my-validator-id 32 --key ~/.qtx/wallet.key.json
+npm run qtx -- validator register 32 --key ~/.qtx/wallet.key.json
 
 # View latest block
 npm run qtx -- block latest
@@ -354,6 +427,8 @@ npm run qtx -- block latest
 | `stake` | Lock QTX as validator stake | `from`, `amount`, `nonce`, `fee` |
 | `unstake` | Unlock staked QTX (cooldown applies) | `from`, `amount`, `nonce`, `fee` |
 | `validator_register` | Register a validator identity | `from`, `validatorId`, `amount`, `nonce`, `fee` |
+| `contract_deploy` | Deploy contract code to a deterministic contract address | `from`, `contractCode`, `nonce`, `fee` |
+| `contract_call` | Call a deployed contract method | `from`, `contractAddress`, `method`, `args`, `nonce`, `fee` |
 
 All transactions must include:
 - `signerPublicKey` — hex-encoded ML-DSA-87 public key
@@ -418,6 +493,38 @@ Returns all registered validators as an array of `{ id, owner, stake, active, mi
 ### `qtx_getMempool`
 
 Returns currently pending (unconfirmed) transactions.
+
+### `qtx_getContractTransactions(contractAddress?, fromHeight?, toHeight?)`
+
+Returns committed contract-related transactions with optional contract and height filtering.
+
+### `qtx_getStorage(contractAddress, key?)`
+
+Returns contract storage map (full map when key omitted, single value when key provided).
+
+### `qtx_estimateGas(tx)`
+
+Returns `{ gasEstimate }` for `contract_deploy` and `contract_call` transactions.
+
+### `qtx_call(tx)`
+
+Read-only simulation for a `contract_call` transaction. Returns execution success/error, receipt snapshot, and post-call simulated storage view.
+
+### `qtx_getCode(contractAddress)`
+
+Returns deployed raw contract code for a contract address.
+
+### `qtx_getReceipt(txHash)`
+
+Returns a contract receipt for transactions that emitted one.
+
+### `qtx_getReceiptsByBlock(height)`
+
+Returns all contract receipts emitted in a block.
+
+### `qtx_getEvents(contractAddress?, fromHeight?, toHeight?)`
+
+Returns contract events with optional contract and height filtering.
 
 ### `qtx_getPeers`
 
@@ -526,6 +633,40 @@ Security notes:
 - Keep faucet funder keys only in deployment env settings.
 - Never commit real wallet JSON to git.
 - Restrict faucet use to low-value dev/test funds.
+
+---
+
+## Browser Wallet Extension
+
+The repository now includes a browser extension wallet at `apps/wallet-extension` with:
+
+- in-page provider API (`window.quantix`)
+- background RPC bridge and transaction signing
+- popup wallet UI (assets, send QTX, send token, activity)
+- options page (account import + RPC configuration)
+- local token test dApp (`apps/wallet-extension/test-dapp`)
+
+Build and type-check:
+
+```bash
+npm run wallet:ext:typecheck
+npm run wallet:ext:build
+```
+
+Load unpacked extension from:
+
+```text
+apps/wallet-extension/dist
+```
+
+Run test dApp locally:
+
+```bash
+cd apps/wallet-extension/test-dapp
+python3 -m http.server 5501
+```
+
+Then open `http://127.0.0.1:5501` and test provider calls (`quantix_connect`, `quantix_contractCall`, `quantix_contractSend`, etc.).
 
 ---
 
@@ -686,7 +827,7 @@ Addresses are 42 characters, always prefixed with `qtx1`.
 npm run test
 ```
 
-Runs all integration tests via Vitest. Tests spin up in-process node instances — no external devnet required.
+Runs integration tests via `tsx --test`. Tests spin up in-process node instances — no external devnet required.
 
 ### Test suites
 
@@ -694,6 +835,7 @@ Runs all integration tests via Vitest. Tests spin up in-process node instances �
 |---|---|
 | `tests/protocol-consensus.test.ts` | BFT consensus round logic, quorum rules, slashing |
 | `tests/node-tx-policy.test.ts` | Mempool nonce policy — stale, conflict, sequence |
+| `tests/contract-rpc.test.ts` | Contract RPC methods (`qtx_call`, storage, receipts, events) |
 | `tests/devnet-4node.test.ts` | 4-node devnet — block production, tx submission |
 | `tests/devnet-convergence.test.ts` | Network convergence after a node rejoins |
 | `tests/sdk.test.ts` | SDK builder and query functions |
@@ -708,10 +850,13 @@ Runs all integration tests via Vitest. Tests spin up in-process node instances �
 | `npm run dev:devnet` | Start 3-node devnet (ports 7331–7333) |
 | `npm run dev:devnet4` | Start 4-node devnet (ports 7341–7344) |
 | `npm run explorer` | Start explorer — args: `<rpc_url> <port>` |
-| `npm run explorer:devnet` | Explorer → `http://localhost:7331/rpc` on port 8080 |
-| `npm run explorer:devnet4` | Explorer → `http://localhost:7341/rpc` on port 8080 |
+| `npm run explorer:devnet` | Explorer → `http://164.68.118.17:7332/rpc` on port 8989 |
 | `npm run qtx` | Wallet CLI — pass commands after `--` |
 | `npm run spam-tx` | Submit rapid test transactions to the devnet |
+| `npm run wallet` | Run web wallet app (`apps/wallet`) |
+| `npm run wallet:build` | Build web wallet app |
+| `npm run wallet:ext:typecheck` | Type-check browser extension wallet |
+| `npm run wallet:ext:build` | Build browser extension wallet to `apps/wallet-extension/dist` |
 | `npm run test` | Run all integration tests |
 | `npm run build` | Compile all packages and apps |
 | `npm run typecheck` | Type-check without emitting files |
