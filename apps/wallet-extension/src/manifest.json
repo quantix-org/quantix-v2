@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Quantix Wallet",
+  "description": "Quantix browser extension wallet provider for dApps.",
+  "version": "0.1.0",
+  "background": {
+    "service_worker": "background/index.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Quantix Wallet",
+    "default_popup": "popup/index.html"
+  },
+  "options_page": "options/index.html",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content/index.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["inpage/provider.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

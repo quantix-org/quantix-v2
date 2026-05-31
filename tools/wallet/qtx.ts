@@ -25,7 +25,7 @@
  *
  * Options (global):
  *   --key      <file>   Path to wallet keyfile  (default: ./wallet.key.json)
- *   --rpc      <url>    Node RPC endpoint       (default: http://164.68.118.17:7331/rpc)
+ *   --rpc      <url>    Node RPC endpoint       (default: http://127.0.0.1:7330/rpc)
  *   --fee      <qtx>    Fee per transaction     (default: 0)
  *   --output   <file>   Where to write new key  (default: ./wallet.key.json)
  *   --chain-id <id>     Chain ID for replay protection (default: quantix-devnet)
@@ -179,7 +179,7 @@ interface Args {
 }
 
 function parseArgs(argv: string[]): Args {
-  const DEFAULT_RPC = "http://164.68.118.17:7331/rpc";
+  const DEFAULT_RPC = "http://127.0.0.1:7330/rpc";
   const DEFAULT_KEY = "./wallet.key.json";
 
   const positional: string[] = [];

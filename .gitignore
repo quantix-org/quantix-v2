@@ -13,3 +13,4 @@ apps/wallet/.env.local
 guide.md
 apps/wallet/.next
 apps/wallet/.env.example
+tools/contract-test

@@ -1,0 +1,21 @@
+{
+  "name": "@quantix/wallet-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "npm run clean && node ./scripts/build.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.21",
+    "esbuild": "^0.25.10",
+    "typescript": "^5.8.0"
+  },
+  "dependencies": {
+    "@noble/hashes": "^1.8.0",
+    "@noble/post-quantum": "^0.6.0",
+    "@quantix/sdk": "*"
+  }
+}

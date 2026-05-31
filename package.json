@@ -21,7 +21,9 @@
     "qtx": "tsx tools/wallet/qtx.ts",
     "spam-tx": "tsx tools/wallet/spam-tx.ts",
     "wallet": "cd apps/wallet && npm run dev",
-    "wallet:build": "npm run -w @quantix/wallet build"
+    "wallet:build": "npm run -w @quantix/wallet build",
+    "wallet:ext:build": "npm run -w @quantix/wallet-extension build",
+    "wallet:ext:typecheck": "npm run -w @quantix/wallet-extension typecheck"
   },
   "dependencies": {
     "react": "^19.2.0",

@@ -911,7 +911,13 @@ async function handleRpcRequest(method: string, params: unknown[]): Promise<unkn
         const block = blocks[i];
         const found = block.txs?.find((t) => t.hash === txHash);
         if (found) {
-          return { ...found, blockHeight: block.height, blockHash: block.hash, status: "committed" };
+          return {
+            ...found,
+            contractAddress: found.contractAddress ?? state.contractReceipts[txHash]?.contractAddress,
+            blockHeight: block.height,
+            blockHash: block.hash,
+            status: "committed",
+          };
         }
       }
       // check mempool

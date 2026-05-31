@@ -1,0 +1,671 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Quantix Extension Test dApp</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --panel: #111932;
+      --line: #2a355f;
+      --txt: #e8edff;
+      --muted: #aab4dd;
+      --ok: #4ade80;
+      --err: #f87171;
+      --btn: #1c2a57;
+      --btn-h: #263873;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      background: radial-gradient(circle at top right, #1d2f66 0%, var(--bg) 45%);
+      color: var(--txt);
+      min-height: 100vh;
+      padding: 24px;
+    }
+
+    .app {
+      max-width: 980px;
+      margin: 0 auto;
+      display: grid;
+      gap: 16px;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    }
+
+    .card {
+      background: linear-gradient(180deg, #131d3b, var(--panel));
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 22px;
+      grid-column: 1 / -1;
+    }
+
+    h2 {
+      margin: 0 0 10px;
+      font-size: 16px;
+    }
+
+    .desc {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 10px;
+      grid-column: 1 / -1;
+    }
+
+    label {
+      display: block;
+      font-size: 12px;
+      color: var(--muted);
+      margin: 8px 0 5px;
+    }
+
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      background: #0c1430;
+      color: var(--txt);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 13px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    textarea { min-height: 92px; resize: vertical; }
+
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .row-3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+
+    .token-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .muted {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    button {
+      margin-top: 10px;
+      width: 100%;
+      border: 1px solid #4054a1;
+      background: var(--btn);
+      color: var(--txt);
+      border-radius: 8px;
+      padding: 8px 10px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    button:hover { background: var(--btn-h); }
+
+    #status { grid-column: 1 / -1; font-size: 13px; }
+    #status.ok { color: var(--ok); }
+    #status.err { color: var(--err); }
+
+    #logs {
+      grid-column: 1 / -1;
+      max-height: 280px;
+      overflow: auto;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: #060a1a;
+      padding: 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      white-space: pre-wrap;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <h1>Quantix Wallet Extension Test dApp</h1>
+    <div class="desc">Gunakan halaman ini untuk uji provider <code>window.quantix</code> (connect, sign, send, contract call/send). Panel Token Tester di bawah bisa langsung dipakai untuk test native token QRC-20.</div>
+
+    <div class="card">
+      <h2>Session</h2>
+      <button id="btn-connect">quantix_connect</button>
+      <button id="btn-active">quantix_getActiveAddress</button>
+      <label>Message</label>
+      <input id="message" value="hello quantix" />
+      <button id="btn-sign">quantix_signMessage</button>
+    </div>
+
+    <div class="card">
+      <h2>Send Transaction</h2>
+      <label>Type</label>
+      <select id="tx-type">
+        <option value="transfer">transfer</option>
+        <option value="stake">stake</option>
+        <option value="unstake">unstake</option>
+        <option value="validator_register">validator_register</option>
+      </select>
+      <label>To (required for transfer)</label>
+      <input id="tx-to" placeholder="qtx1..." />
+      <div class="row">
+        <div>
+          <label>Amount (QTX, supports decimal)</label>
+          <input id="tx-amount" value="1" />
+        </div>
+        <div>
+          <label>Fee (QTX, supports decimal)</label>
+          <input id="tx-fee" value="0" />
+        </div>
+      </div>
+      <label>Validator ID (optional)</label>
+      <input id="tx-validator" placeholder="validator id" />
+      <button id="btn-send">quantix_sendTransaction</button>
+    </div>
+
+    <div class="card">
+      <h2>Contract</h2>
+      <label>Contract Address</label>
+      <input id="ct-address" placeholder="qtxContract..." />
+      <label>Method</label>
+      <input id="ct-method" value="get" />
+      <label>Args (JSON Array)</label>
+      <textarea id="ct-args">["counter"]</textarea>
+      <div class="row">
+        <div>
+          <label>Gas Limit</label>
+          <input id="ct-gas" value="300000" />
+        </div>
+        <div>
+          <label>Value (QTX, supports decimal)</label>
+          <input id="ct-value" value="0" />
+        </div>
+      </div>
+      <button id="btn-call">quantix_contractCall</button>
+      <button id="btn-contract-send">quantix_contractSend</button>
+    </div>
+
+    <div class="card" style="grid-column: 1 / -1;">
+      <h2>Token Tester (QRC-20 Native)</h2>
+      <div class="muted">Semua amount pada panel ini pakai format token desimal (bukan base units), lalu otomatis dikonversi sesuai <code>Token Decimals</code>.</div>
+
+      <label>Token Contract Address</label>
+      <input id="tk-contract" placeholder="qtxContract..." />
+
+      <div class="row-3">
+        <div>
+          <label>Token Decimals</label>
+          <input id="tk-decimals" value="18" />
+        </div>
+        <div>
+          <label>Amount (token units)</label>
+          <input id="tk-amount" value="1" />
+        </div>
+        <div>
+          <label>Burn Amount (token units)</label>
+          <input id="tk-burn-amount" value="0.1" />
+        </div>
+      </div>
+
+      <label>Owner Address</label>
+      <input id="tk-owner" placeholder="qtx1... (opsional: kosong = address aktif)" />
+      <label>Recipient Address</label>
+      <input id="tk-recipient" placeholder="qtx1..." />
+      <label>Spender Address</label>
+      <input id="tk-spender" placeholder="qtx1..." />
+
+      <label>Config Key / Value (owner only)</label>
+      <div class="row">
+        <input id="tk-config-key" value="website" />
+        <input id="tk-config-value" value="https://example.com" />
+      </div>
+
+      <div class="token-grid">
+        <button id="btn-token-fill-active">Use Active as Owner</button>
+        <button id="btn-token-read-suite">Run Read Test Suite</button>
+        <button id="btn-token-total-supply">token_total_supply</button>
+        <button id="btn-token-balance-owner">token_balance_of(owner)</button>
+        <button id="btn-token-balance-recipient">token_balance_of(recipient)</button>
+        <button id="btn-token-allowance">token_allowance(owner,spender)</button>
+      </div>
+
+      <div class="token-grid">
+        <button id="btn-token-transfer">token_transfer(to,amount)</button>
+        <button id="btn-token-approve">token_approve(spender,amount)</button>
+        <button id="btn-token-transfer-from">token_transfer_from(from,to,amount)</button>
+        <button id="btn-token-mint">token_mint(to,amount)</button>
+        <button id="btn-token-burn">token_burn(amount)</button>
+        <button id="btn-token-config">token_config(key,value)</button>
+      </div>
+    </div>
+
+    <div id="status"></div>
+    <div id="logs"></div>
+  </div>
+
+  <script>
+    const logs = document.getElementById('logs');
+    const status = document.getElementById('status');
+
+    function writeLog(title, payload) {
+      const line = `[${new Date().toISOString()}] ${title}\n${JSON.stringify(payload, null, 2)}\n\n`;
+      logs.textContent = line + logs.textContent;
+    }
+
+    function setStatus(ok, message) {
+      status.className = ok ? 'ok' : 'err';
+      status.textContent = message;
+    }
+
+    async function call(method, params) {
+      if (!window.quantix || typeof window.quantix.request !== 'function') {
+        throw new Error('window.quantix not found. Pastikan extension aktif di halaman ini.');
+      }
+      return window.quantix.request({ method, params });
+    }
+
+    function parseQtxToBaseUnits(input) {
+      const raw = String(input ?? '').trim();
+      if (!raw) return '0';
+
+      // Use `raw:123` if you want to pass exact base units without conversion.
+      if (raw.startsWith('raw:')) {
+        const direct = raw.slice(4).trim();
+        if (!/^\d+$/.test(direct)) throw new Error('Format raw amount invalid. Example: raw:1000000000000000000');
+        return direct;
+      }
+
+      if (!/^\d+(\.\d+)?$/.test(raw)) {
+        throw new Error(`Invalid QTX amount: ${raw}`);
+      }
+
+      const [wholePart, fracPart = ''] = raw.split('.');
+      if (fracPart.length > 18) {
+        throw new Error('QTX amount supports max 18 decimal places.');
+      }
+
+      const whole = BigInt(wholePart || '0');
+      const frac = BigInt((fracPart + '0'.repeat(18)).slice(0, 18));
+      const base = whole * (10n ** 18n) + frac;
+      return base.toString();
+    }
+
+    function parseTokenToBaseUnits(input, decimals) {
+      const raw = String(input ?? '').trim();
+      if (!raw) return '0';
+
+      if (raw.startsWith('raw:')) {
+        const direct = raw.slice(4).trim();
+        if (!/^\d+$/.test(direct)) throw new Error('Format raw amount invalid. Example: raw:1000000000000000000');
+        return direct;
+      }
+
+      if (!/^\d+(\.\d+)?$/.test(raw)) {
+        throw new Error(`Invalid token amount: ${raw}`);
+      }
+
+      const dec = Number(decimals);
+      if (!Number.isInteger(dec) || dec < 0 || dec > 30) {
+        throw new Error('Token Decimals harus integer 0..30.');
+      }
+
+      const [wholePart, fracPart = ''] = raw.split('.');
+      if (fracPart.length > dec) {
+        throw new Error(`Token amount supports max ${dec} decimal places.`);
+      }
+
+      const scale = 10n ** BigInt(dec);
+      const whole = BigInt(wholePart || '0');
+      const frac = BigInt((fracPart + '0'.repeat(dec)).slice(0, dec) || '0');
+      const base = whole * scale + frac;
+      return base.toString();
+    }
+
+    async function requestActiveAddress() {
+      const active = await call('quantix_getActiveAddress');
+      if (!active) throw new Error('Active address kosong. Jalankan quantix_connect dulu.');
+      return String(active);
+    }
+
+    function readTokenForm() {
+      return {
+        contractAddress: document.getElementById('tk-contract').value.trim(),
+        decimals: document.getElementById('tk-decimals').value.trim() || '18',
+        amount: document.getElementById('tk-amount').value.trim() || '0',
+        burnAmount: document.getElementById('tk-burn-amount').value.trim() || '0',
+        owner: document.getElementById('tk-owner').value.trim(),
+        recipient: document.getElementById('tk-recipient').value.trim(),
+        spender: document.getElementById('tk-spender').value.trim(),
+        configKey: document.getElementById('tk-config-key').value.trim(),
+        configValue: document.getElementById('tk-config-value').value.trim(),
+      };
+    }
+
+    function ensureTokenContractAddress(addr) {
+      if (!addr) throw new Error('Token contract address wajib diisi.');
+    }
+
+    async function tokenCall(method, args) {
+      const { contractAddress } = readTokenForm();
+      ensureTokenContractAddress(contractAddress);
+      const payload = {
+        contractAddress,
+        method,
+        args,
+        gasLimit: 300000,
+        value: '0',
+      };
+      const result = await call('quantix_contractCall', payload);
+      writeLog(`TOKEN CALL ${method} OK`, { args, result });
+      return result;
+    }
+
+    async function tokenSend(method, args) {
+      const { contractAddress } = readTokenForm();
+      ensureTokenContractAddress(contractAddress);
+      const payload = {
+        contractAddress,
+        method,
+        args,
+        gasLimit: 300000,
+        value: '0',
+      };
+      const result = await call('quantix_contractSend', payload);
+      writeLog(`TOKEN SEND ${method} OK`, { args, result });
+      return result;
+    }
+
+    function mirrorTokenContractToGenericPanel() {
+      const tokenContract = document.getElementById('tk-contract').value.trim();
+      if (tokenContract) {
+        document.getElementById('ct-address').value = tokenContract;
+      }
+    }
+
+    function readContractPayload() {
+      const argsRaw = document.getElementById('ct-args').value.trim();
+      let args = [];
+      if (argsRaw) {
+        args = JSON.parse(argsRaw);
+        if (!Array.isArray(args)) throw new Error('Args harus JSON array.');
+      }
+
+      return {
+        contractAddress: document.getElementById('ct-address').value.trim(),
+        method: document.getElementById('ct-method').value.trim(),
+        args,
+        gasLimit: Number(document.getElementById('ct-gas').value || '300000'),
+        value: parseQtxToBaseUnits(document.getElementById('ct-value').value),
+      };
+    }
+
+    document.getElementById('btn-connect').addEventListener('click', async () => {
+      try {
+        const result = await call('quantix_connect');
+        setStatus(true, 'Connected');
+        writeLog('quantix_connect OK', result);
+      } catch (err) {
+        setStatus(false, err.message);
+        writeLog('quantix_connect ERR', { message: err.message, code: err.code });
+      }
+    });
+
+    document.getElementById('btn-active').addEventListener('click', async () => {
+      try {
+        const result = await call('quantix_getActiveAddress');
+        setStatus(true, 'Address loaded');
+        writeLog('quantix_getActiveAddress OK', result);
+      } catch (err) {
+        setStatus(false, err.message);
+        writeLog('quantix_getActiveAddress ERR', { message: err.message, code: err.code });
+      }
+    });
+
+    document.getElementById('btn-sign').addEventListener('click', async () => {
+      try {
+        const message = document.getElementById('message').value;
+        const result = await call('quantix_signMessage', { message });
+        setStatus(true, 'Message signed');
+        writeLog('quantix_signMessage OK', result);
+      } catch (err) {
+        setStatus(false, err.message);
+        writeLog('quantix_signMessage ERR', { message: err.message, code: err.code });
+      }
+    });
+
+    document.getElementById('btn-send').addEventListener('click', async () => {
+      try {
+        const payload = {
+          type: document.getElementById('tx-type').value,
+          to: document.getElementById('tx-to').value.trim() || undefined,
+          amount: parseQtxToBaseUnits(document.getElementById('tx-amount').value),
+          fee: parseQtxToBaseUnits(document.getElementById('tx-fee').value),
+          validatorId: document.getElementById('tx-validator').value.trim() || undefined,
+        };
+        const result = await call('quantix_sendTransaction', payload);
+        setStatus(true, 'Transaction submitted');
+        writeLog('quantix_sendTransaction OK', result);
+      } catch (err) {
+        setStatus(false, err.message);
+        writeLog('quantix_sendTransaction ERR', { message: err.message, code: err.code });
+      }
+    });
+
+    document.getElementById('btn-call').addEventListener('click', async () => {
+      try {
+        const payload = readContractPayload();
+        const result = await call('quantix_contractCall', payload);
+        setStatus(true, 'Contract call success');
+        writeLog('quantix_contractCall OK', result);
+      } catch (err) {
+        setStatus(false, err.message);
+        writeLog('quantix_contractCall ERR', { message: err.message, code: err.code });
+      }
+    });
+
+    document.getElementById('btn-contract-send').addEventListener('click', async () => {
+      try {
+        const payload = readContractPayload();
+        const result = await call('quantix_contractSend', payload);
+        setStatus(true, 'Contract transaction submitted');
+        writeLog('quantix_contractSend OK', result);
+      } catch (err) {
+        setStatus(false, err.message);
+        writeLog('quantix_contractSend ERR', { message: err.message, code: err.code });
+      }
+    });
+
+    document.getElementById('btn-token-fill-active').addEventListener('click', async () => {
+      try {
+        const active = await requestActiveAddress();
+        document.getElementById('tk-owner').value = active;
+        setStatus(true, 'Owner diisi dari active address');
+        writeLog('token helper OK', { owner: active });
+      } catch (err) {
+        setStatus(false, err.message);
+        writeLog('token helper ERR', { message: err.message, code: err.code });
+      }
+    });
+
+    document.getElementById('btn-token-total-supply').addEventListener('click', async () => {
+      try {
+        mirrorTokenContractToGenericPanel();
+        const result = await tokenCall('token_total_supply', []);
+        setStatus(true, `Total supply: ${String(result.decodedReturnData ?? 'undefined')}`);
+      } catch (err) {
+        setStatus(false, err.message);
+        writeLog('token_total_supply ERR', { message: err.message, code: err.code });
+      }
+    });
+
+    document.getElementById('btn-token-balance-owner').addEventListener('click', async () => {
+      try {
+        mirrorTokenContractToGenericPanel();
+        const data = readTokenForm();
+        const owner = data.owner || await requestActiveAddress();
+        const result = await tokenCall('token_balance_of', [owner]);
+        setStatus(true, `Owner balance: ${String(result.decodedReturnData ?? 'undefined')}`);
+      } catch (err) {
+        setStatus(false, err.message);
+        writeLog('token_balance_of(owner) ERR', { message: err.message, code: err.code });
+      }
+    });
+
+    document.getElementById('btn-token-balance-recipient').addEventListener('click', async () => {
+      try {
+        mirrorTokenContractToGenericPanel();
+        const data = readTokenForm();
+        if (!data.recipient) throw new Error('Recipient address wajib diisi.');
+        const result = await tokenCall('token_balance_of', [data.recipient]);
+        setStatus(true, `Recipient balance: ${String(result.decodedReturnData ?? 'undefined')}`);
+      } catch (err) {
+        setStatus(false, err.message);
+        writeLog('token_balance_of(recipient) ERR', { message: err.message, code: err.code });
+      }
+    });
+
+    document.getElementById('btn-token-allowance').addEventListener('click', async () => {
+      try {
+        mirrorTokenContractToGenericPanel();
+        const data = readTokenForm();
+        const owner = data.owner || await requestActiveAddress();
+        if (!data.spender) throw new Error('Spender address wajib diisi.');
+        const result = await tokenCall('token_allowance', [owner, data.spender]);
+        setStatus(true, `Allowance: ${String(result.decodedReturnData ?? 'undefined')}`);
+      } catch (err) {
+        setStatus(false, err.message);
+        writeLog('token_allowance ERR', { message: err.message, code: err.code });
+      }
+    });
+
+    document.getElementById('btn-token-transfer').addEventListener('click', async () => {
+      try {
+        mirrorTokenContractToGenericPanel();
+        const data = readTokenForm();
+        if (!data.recipient) throw new Error('Recipient address wajib diisi.');
+        const amountBase = parseTokenToBaseUnits(data.amount, data.decimals);
+        const result = await tokenSend('token_transfer', [data.recipient, amountBase]);
+        setStatus(true, `token_transfer submitted: ${result.txHash || 'ok'}`);
+      } catch (err) {
+        setStatus(false, err.message);
+        writeLog('token_transfer ERR', { message: err.message, code: err.code });
+      }
+    });
+
+    document.getElementById('btn-token-approve').addEventListener('click', async () => {
+      try {
+        mirrorTokenContractToGenericPanel();
+        const data = readTokenForm();
+        if (!data.spender) throw new Error('Spender address wajib diisi.');
+        const amountBase = parseTokenToBaseUnits(data.amount, data.decimals);
+        const result = await tokenSend('token_approve', [data.spender, amountBase]);
+        setStatus(true, `token_approve submitted: ${result.txHash || 'ok'}`);
+      } catch (err) {
+        setStatus(false, err.message);
+        writeLog('token_approve ERR', { message: err.message, code: err.code });
+      }
+    });
+
+    document.getElementById('btn-token-transfer-from').addEventListener('click', async () => {
+      try {
+        mirrorTokenContractToGenericPanel();
+        const data = readTokenForm();
+        const owner = data.owner || await requestActiveAddress();
+        if (!data.recipient) throw new Error('Recipient address wajib diisi.');
+        const amountBase = parseTokenToBaseUnits(data.amount, data.decimals);
+        const result = await tokenSend('token_transfer_from', [owner, data.recipient, amountBase]);
+        setStatus(true, `token_transfer_from submitted: ${result.txHash || 'ok'}`);
+      } catch (err) {
+        setStatus(false, err.message);
+        writeLog('token_transfer_from ERR', { message: err.message, code: err.code });
+      }
+    });
+
+    document.getElementById('btn-token-mint').addEventListener('click', async () => {
+      try {
+        mirrorTokenContractToGenericPanel();
+        const data = readTokenForm();
+        if (!data.recipient) throw new Error('Recipient address wajib diisi.');
+        const amountBase = parseTokenToBaseUnits(data.amount, data.decimals);
+        const result = await tokenSend('token_mint', [data.recipient, amountBase]);
+        setStatus(true, `token_mint submitted: ${result.txHash || 'ok'}`);
+      } catch (err) {
+        setStatus(false, err.message);
+        writeLog('token_mint ERR', { message: err.message, code: err.code });
+      }
+    });
+
+    document.getElementById('btn-token-burn').addEventListener('click', async () => {
+      try {
+        mirrorTokenContractToGenericPanel();
+        const data = readTokenForm();
+        const burnBase = parseTokenToBaseUnits(data.burnAmount, data.decimals);
+        const result = await tokenSend('token_burn', [burnBase]);
+        setStatus(true, `token_burn submitted: ${result.txHash || 'ok'}`);
+      } catch (err) {
+        setStatus(false, err.message);
+        writeLog('token_burn ERR', { message: err.message, code: err.code });
+      }
+    });
+
+    document.getElementById('btn-token-config').addEventListener('click', async () => {
+      try {
+        mirrorTokenContractToGenericPanel();
+        const data = readTokenForm();
+        if (!data.configKey) throw new Error('Config key wajib diisi.');
+        const result = await tokenSend('token_config', [data.configKey, data.configValue]);
+        setStatus(true, `token_config submitted: ${result.txHash || 'ok'}`);
+      } catch (err) {
+        setStatus(false, err.message);
+        writeLog('token_config ERR', { message: err.message, code: err.code });
+      }
+    });
+
+    document.getElementById('btn-token-read-suite').addEventListener('click', async () => {
+      try {
+        mirrorTokenContractToGenericPanel();
+        const data = readTokenForm();
+        const owner = data.owner || await requestActiveAddress();
+        if (!data.spender) throw new Error('Spender address wajib diisi untuk read suite.');
+
+        const total = await tokenCall('token_total_supply', []);
+        const ownerBal = await tokenCall('token_balance_of', [owner]);
+        const allowance = await tokenCall('token_allowance', [owner, data.spender]);
+        const recipientBal = data.recipient
+          ? await tokenCall('token_balance_of', [data.recipient])
+          : { decodedReturnData: 'recipient not set' };
+
+        setStatus(true, 'Read suite completed');
+        writeLog('TOKEN READ SUITE RESULT', {
+          contract: data.contractAddress,
+          owner,
+          spender: data.spender,
+          recipient: data.recipient || null,
+          totalSupply: total.decodedReturnData,
+          ownerBalance: ownerBal.decodedReturnData,
+          allowance: allowance.decodedReturnData,
+          recipientBalance: recipientBal.decodedReturnData,
+        });
+      } catch (err) {
+        setStatus(false, err.message);
+        writeLog('TOKEN READ SUITE ERR', { message: err.message, code: err.code });
+      }
+    });
+  </script>
+</body>
+</html>
