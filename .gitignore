@@ -14,3 +14,4 @@ guide.md
 apps/wallet/.next
 apps/wallet/.env.example
 tools/contract-test
+misc
