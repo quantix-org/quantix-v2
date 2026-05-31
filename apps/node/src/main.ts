@@ -3,8 +3,11 @@ import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import {
+  applyTransaction,
   applyBlock,
+  cloneState,
   createGenesisState,
+  estimateContractGasUsage,
   runConsensusRound,
   slashValidatorForEquivocation,
   transactionSigningPayload,
@@ -943,6 +946,125 @@ async function handleRpcRequest(method: string, params: unknown[]): Promise<unkn
     case "qtx_getMempool": {
       return mempool.map((tx) => ({ hash: hashTx(tx), from: tx.from, nonce: tx.nonce, type: tx.type }));
     }
+    case "qtx_getCode": {
+      const contractAddress = String(params[0] ?? "");
+      const contract = state.contracts[contractAddress];
+      if (!contract) {
+        throw new RpcError(RpcErrorCode.NOT_FOUND, `contract ${contractAddress} not found`);
+      }
+      return {
+        address: contract.address,
+        owner: contract.owner,
+        codeHash: contract.codeHash,
+        code: contract.code,
+        deployedAtHeight: contract.deployedAtHeight,
+        salt: contract.salt ?? null,
+      };
+    }
+    case "qtx_getReceipt": {
+      const txHash = String(params[0] ?? "");
+      const receipt = state.contractReceipts[txHash];
+      if (!receipt) {
+        throw new RpcError(RpcErrorCode.NOT_FOUND, `receipt ${txHash} not found`);
+      }
+      return receipt;
+    }
+    case "qtx_getReceiptsByBlock": {
+      const blockHeight = Number(params[0]);
+      if (!Number.isInteger(blockHeight) || blockHeight < 0) {
+        throw new RpcError(RpcErrorCode.INVALID_PARAMS, "blockHeight must be a non-negative integer");
+      }
+      return Object.values(state.contractReceipts)
+        .filter((receipt) => receipt.blockHeight === blockHeight)
+        .sort((a, b) => a.txHash.localeCompare(b.txHash));
+    }
+    case "qtx_getEvents": {
+      const contractAddress = String(params[0] ?? "");
+      const fromHeight = Number(params[1] ?? 0);
+      const toHeight = Number(params[2] ?? Number.MAX_SAFE_INTEGER);
+      const name = params[3] !== undefined ? String(params[3]) : "";
+
+      return state.contractEvents.filter((event) => {
+        if (contractAddress && event.contractAddress !== contractAddress) return false;
+        if (event.blockHeight < fromHeight || event.blockHeight > toHeight) return false;
+        if (name && event.name !== name) return false;
+        return true;
+      });
+    }
+    case "qtx_getContractTransactions": {
+      const contractAddress = String(params[0] ?? "");
+      const fromHeight = Number(params[1] ?? 0);
+      const toHeight = Number(params[2] ?? Number.MAX_SAFE_INTEGER);
+
+      return blocks
+        .filter((block) => block.height >= fromHeight && block.height <= toHeight)
+        .flatMap((block) =>
+          block.txs
+            .filter((tx) => tx.type === "contract_deploy" || tx.type === "contract_call")
+            .filter((tx) => {
+              if (!contractAddress) return true;
+              if (tx.contractAddress === contractAddress) return true;
+              return state.contractReceipts[tx.hash]?.contractAddress === contractAddress;
+            })
+            .map((tx) => ({
+              ...tx,
+              contractAddress: tx.contractAddress ?? state.contractReceipts[tx.hash]?.contractAddress,
+              blockHeight: block.height,
+              blockHash: block.hash,
+            })),
+        );
+    }
+    case "qtx_getStorage": {
+      const contractAddress = String(params[0] ?? "");
+      if (!contractAddress) {
+        throw new RpcError(RpcErrorCode.INVALID_PARAMS, "missing contractAddress");
+      }
+      if (!state.contracts[contractAddress]) {
+        throw new RpcError(RpcErrorCode.NOT_FOUND, `contract ${contractAddress} not found`);
+      }
+
+      const key = params[1] !== undefined ? String(params[1]) : "";
+      const storage = state.contractStorage[contractAddress] ?? {};
+      if (!key) {
+        return { contractAddress, storage };
+      }
+      return {
+        contractAddress,
+        key,
+        value: storage[key] ?? null,
+      };
+    }
+    case "qtx_estimateGas": {
+      const tx = parseRpcTransactionStrict(params[0]);
+      if (tx.type !== "contract_deploy" && tx.type !== "contract_call") {
+        throw new RpcError(RpcErrorCode.INVALID_PARAMS, "estimateGas supports contract_deploy or contract_call only");
+      }
+      return { gasEstimate: estimateContractGasUsage(tx) };
+    }
+    case "qtx_call": {
+      const tx = parseRpcTransactionStrict(params[0]);
+      if (tx.type !== "contract_call") {
+        throw new RpcError(RpcErrorCode.INVALID_PARAMS, "qtx_call requires a contract_call transaction payload");
+      }
+
+      const sim = cloneState(state);
+      const outcome = applyTransaction(sim, tx, protocolConfig, { verifySignature: verifier });
+      if (outcome !== true) {
+        return {
+          success: false,
+          error: outcome,
+          contractAddress: tx.contractAddress,
+        };
+      }
+
+      const txHash = hashTx(tx);
+      return {
+        success: true,
+        contractAddress: tx.contractAddress,
+        receipt: sim.contractReceipts[txHash] ?? null,
+        storage: tx.contractAddress ? sim.contractStorage[tx.contractAddress] ?? {} : {},
+      };
+    }
     case "qtx_submitTransaction": {
       const tx = parseRpcTransactionStrict(params[0]);
       const result = enqueueSignedTx(tx);
@@ -1260,6 +1382,8 @@ function txToStored(tx: Transaction): StoredTx {
     fee: tx.fee.toString(),
     ...(tx.to !== undefined ? { to: tx.to } : {}),
     ...(tx.validatorId !== undefined ? { validatorId: tx.validatorId } : {}),
+    ...(tx.contractAddress !== undefined ? { contractAddress: tx.contractAddress } : {}),
+    ...(tx.method !== undefined ? { method: tx.method } : {}),
   };
 }
 

@@ -58,6 +58,8 @@ export interface StoredTx {
   fee: string;
   to?: string;
   validatorId?: string;
+  contractAddress?: string;
+  method?: string;
 }
 
 export interface StoredBlock {

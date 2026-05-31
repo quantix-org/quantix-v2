@@ -231,7 +231,15 @@ function esc(s) {
 function truncAddr(s) { if (!s) return '\u2014'; return s.length > 18 ? s.slice(0,10)+'\u2026'+s.slice(-6) : s; }
 function truncHash(s) { if (!s) return '\u2014'; return s.length > 18 ? s.slice(0,10)+'\u2026'+s.slice(-8) : s; }
 function typeBadge(type) {
-  var cls = { transfer:'b-blue', stake:'b-orange', unstake:'b-yellow', validator_register:'b-purple' };
+  var cls = {
+    transfer:'b-blue',
+    stake:'b-orange',
+    unstake:'b-yellow',
+    validator_register:'b-purple',
+    validator_unregister:'b-gray',
+    contract_deploy:'b-green',
+    contract_call:'b-purple'
+  };
   return '<span class="badge '+(cls[type]||'b-gray')+'">'+esc(type)+'</span>';
 }
 function statusBadge(ok) {
@@ -245,9 +253,12 @@ function valBadge(v) {
 function navLink(path, text, cls) {
   return '<a class="'+(cls||'hl')+'" data-nav="'+esc(path)+'">'+text+'</a>';
 }
+function isContractAddress(addr) {
+  return /^qtxContract/i.test(String(addr || ''));
+}
 function addrLink(addr, display) {
   if (!addr) return '\u2014';
-  return navLink('/address/'+addr, esc(display||truncAddr(addr)));
+  return navLink((isContractAddress(addr)?'/contract/':'/address/')+addr, esc(display||truncAddr(addr)));
 }
 function blockLink(h) { return navLink('/block/'+h, '#'+h); }
 function txLink(hash, display) {
@@ -270,13 +281,46 @@ document.addEventListener('click', function(e) {
     });
     return;
   }
+  var cf = e.target.closest('[data-contract-filter]');
+  if (cf) {
+    e.preventDefault();
+    var addr = String(cf.dataset.addr || '');
+    var txPage = Number(cf.dataset.txPage || 0) || 0;
+    var evPage = Number(cf.dataset.evPage || 0) || 0;
+    var pageSize = Number(cf.dataset.pageSize || 25) || 25;
+    var input = document.getElementById('contract-event-filter');
+    var eventFilter = input ? String(input.value || '').trim() : '';
+    navigate(buildContractPath(addr, txPage, evPage, eventFilter, pageSize));
+    return;
+  }
+  var cc = e.target.closest('[data-contract-clear]');
+  if (cc) {
+    e.preventDefault();
+    var cAddr = String(cc.dataset.addr || '');
+    var cTxPage = Number(cc.dataset.txPage || 0) || 0;
+    var cPageSize = Number(cc.dataset.pageSize || 25) || 25;
+    navigate(buildContractPath(cAddr, cTxPage, 0, '', cPageSize));
+    return;
+  }
   var nv = e.target.closest('[data-nav]');
   if (nv) { e.preventDefault(); navigate(nv.dataset.nav); }
+});
+document.addEventListener('keydown', function(e) {
+  var target = e.target;
+  if (!target || target.id !== 'contract-event-filter') return;
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  var addr = String(target.dataset.addr || '');
+  var txPage = Number(target.dataset.txPage || 0) || 0;
+  var pageSize = Number(target.dataset.pageSize || 25) || 25;
+  var eventFilter = String(target.value || '').trim();
+  navigate(buildContractPath(addr, txPage, 0, eventFilter, pageSize));
 });
 function doSearch() {
   var q = document.getElementById('gsearch').value.trim();
   if (!q) return;
   if (/^[0-9]+$/.test(q))  { navigate('/block/'+q); return; }
+  if (isContractAddress(q)) { navigate('/contract/'+q); return; }
   if (/^qtx/i.test(q))  { navigate('/address/'+q); return; }
   navigate('/tx/'+q);
 }
@@ -285,13 +329,39 @@ document.getElementById('search-btn').addEventListener('click', doSearch);
 var _timer = null;
 function stopTimer() { if (_timer) { clearInterval(_timer); _timer = null; } }
 function navigate(path) { location.hash = '#'+path; }
+function buildContractPath(addr, txPage, evPage, eventFilter, pageSize) {
+  var q = [];
+  if (txPage > 0) q.push('txPage=' + txPage);
+  if (evPage > 0) q.push('evPage=' + evPage);
+  if (eventFilter) q.push('event=' + encodeURIComponent(eventFilter));
+  if (pageSize && Number(pageSize) !== 25) q.push('size=' + Number(pageSize));
+  return '/contract/' + addr + (q.length ? '?' + q.join('&') : '');
+}
+function parseQuery(qs) {
+  var out = {};
+  if (!qs) return out;
+  var body = qs.charAt(0) === '?' ? qs.slice(1) : qs;
+  if (!body) return out;
+  var parts = body.split('&');
+  for (var i=0; i<parts.length; i++) {
+    var kv = parts[i].split('=');
+    var k = decodeURIComponent(kv[0] || '');
+    if (!k) continue;
+    out[k] = decodeURIComponent(kv[1] || '');
+  }
+  return out;
+}
 function route() {
   stopTimer();
-  var path = location.hash.replace(/^#/,'') || '/';
+  var full = location.hash.replace(/^#/,'') || '/';
+  var qpos = full.indexOf('?');
+  var path = qpos >= 0 ? full.slice(0, qpos) : full;
+  var query = qpos >= 0 ? parseQuery(full.slice(qpos)) : {};
   document.getElementById('app').innerHTML = '<div class="loading">Loading\u2026</div>';
   if (path==='/'||path==='')           renderHome();
   else if (path.startsWith('/block/')) renderBlock(Number(path.slice(7)));
-  else if (path.startsWith('/tx/'))    renderTx(path.slice(4));
+  else if (path.startsWith('/tx/'))    renderTx(path.slice(4), query);
+  else if (path.startsWith('/contract/')) renderContract(path.slice(10), query);
   else if (path.startsWith('/address/')) renderAddress(path.slice(9));
   else if (path==='/validators')       renderValidators();
   else document.getElementById('app').innerHTML = '<div class="err">Not found: '+esc(path)+'</div>';
@@ -364,7 +434,7 @@ function buildHome(info, h, blocks, recentTxs, validators, activeV, mempool, pee
       +'<td style="color:var(--muted);font-family:sans-serif">'+esc(fmtTime(t.timestamp))+'</td>'
       +'<td>'+typeBadge(t.type)+'</td>'
       +'<td>'+addrLink(t.from)+'</td>'
-      +'<td>'+(t.to?addrLink(t.to):t.validatorId?addrLink(t.validatorId):'\u2014')+'</td>'
+        +'<td>'+(t.to?addrLink(t.to):t.validatorId?addrLink(t.validatorId):t.contractAddress?addrLink(t.contractAddress):'\u2014')+'</td>'
       +'<td>'+fmtQtx(t.amount)+'</td>'
       +'</tr>';
   }
@@ -446,7 +516,7 @@ async function renderBlock(height) {
           +'<td style="color:var(--muted);font-family:sans-serif">'+esc(fmtTime(t.timestamp))+'</td>'
           +'<td>'+typeBadge(t.type)+'</td>'
           +'<td>'+addrLink(t.from)+'</td>'
-          +'<td>'+(t.to?addrLink(t.to):t.validatorId?addrLink(t.validatorId):'\u2014')+'</td>'
+          +'<td>'+(t.to?addrLink(t.to):t.validatorId?addrLink(t.validatorId):t.contractAddress?addrLink(t.contractAddress):'\u2014')+'</td>'
           +'<td>'+fmtQtx(t.amount)+'</td>'
           +'<td>'+fmtQtx(t.fee)+'</td>'
           +'<td>'+t.nonce+'</td>'
@@ -481,9 +551,15 @@ async function renderBlock(height) {
 }
 
 // ── TX DETAIL ─────────────────────────────────────────────────────────────────
-async function renderTx(hash) {
+async function renderTx(hash, query) {
   try {
     var t = await rpc('qtx_getTransaction',[hash]);
+    var receipt = null;
+    var eventContext = query && query.event ? String(query.event) : '';
+    var contractContext = query && query.contract ? String(query.contract) : '';
+    if (t.type === 'contract_deploy' || t.type === 'contract_call') {
+      try { receipt = await rpc('qtx_getReceipt', [t.hash]); } catch(e) {}
+    }
     document.getElementById('app').innerHTML =
       '<div class="breadcrumb">'+navLink('/','Home')+'<span class="sep">\u203a</span><span>Transaction</span></div>'
       +'<div class="card"><div class="card-head">Transaction Detail&nbsp;&nbsp;'
@@ -496,10 +572,18 @@ async function renderTx(hash) {
       +drow('From', addrLink(t.from,t.from)+copyBtn(t.from))
       +(t.to ? drow('To', addrLink(t.to,t.to)+copyBtn(t.to)) : '')
       +(t.validatorId ? drow('Validator ID', addrLink(t.validatorId,t.validatorId)+copyBtn(t.validatorId)) : '')
+        +(t.contractAddress ? drow('Contract', addrLink(t.contractAddress,t.contractAddress)+copyBtn(t.contractAddress)) : '')
+        +(t.contractAddress ? drow('Contract Page', navLink('/contract/'+t.contractAddress, 'Open Contract Detail')) : '')
+        +(eventContext ? drow('Event Context', '<span class="badge b-blue">'+esc(eventContext)+'</span>') : '')
+        +(contractContext ? drow('Back To Contract', navLink('/contract/'+contractContext+(eventContext?('?event='+encodeURIComponent(eventContext)):'') , 'Open Filtered Contract View')) : '')
+        +(t.method ? drow('Method', '<span class="hl">'+esc(t.method)+'</span>') : '')
       +drow('Timestamp', esc(fmtTime(t.timestamp)))
       +drow('Amount', fmtQtx(t.amount))
       +drow('Fee', fmtQtx(t.fee))
       +drow('Nonce', String(t.nonce))
+        +(receipt ? drow('Receipt Status', receipt.success ? '<span class="badge b-green">success</span>' : '<span class="badge b-red">failed</span>') : '')
+        +(receipt ? drow('Gas Used', String(receipt.gasUsed)) : '')
+        +(receipt && receipt.error ? drow('Execution Error', '<span style="color:var(--red)">'+esc(receipt.error)+'</span>') : '')
       +'</div>';
   } catch(e) {
     document.getElementById('app').innerHTML =
@@ -511,6 +595,7 @@ async function renderTx(hash) {
 // ── ADDRESS DETAIL ────────────────────────────────────────────────────────────
 async function renderAddress(addr) {
   try {
+    var isContract = /^qtxContract/i.test(addr);
     var res = await Promise.all([
       rpc('qtx_getBalance',[addr]),
       rpc('qtx_getValidators'),
@@ -530,10 +615,22 @@ async function renderAddress(addr) {
       var txs=blocks[bi].txs||[];
       for (var ti=0;ti<txs.length;ti++) {
         var tx=txs[ti];
-        if (tx.from===addr||tx.to===addr||tx.validatorId===addr) history.push({tx:tx,bh:blocks[bi].height});
+        if (tx.from===addr||tx.to===addr||tx.validatorId===addr||tx.contractAddress===addr) history.push({tx:tx,bh:blocks[bi].height});
       }
     }
     history.reverse();
+
+    var contractMeta = null;
+    var contractStorage = null;
+    var contractEvents = [];
+    var contractTxs = [];
+    if (isContract) {
+      try { contractMeta = await rpc('qtx_getCode', [addr]); } catch(e) {}
+      try { contractStorage = await rpc('qtx_getStorage', [addr]); } catch(e) {}
+      try { contractEvents = await rpc('qtx_getEvents', [addr, Math.max(0, h-200), h, '']); } catch(e) {}
+      try { contractTxs = await rpc('qtx_getContractTransactions', [addr, Math.max(0, h-200), h]); } catch(e) {}
+    }
+
     var txRows='';
     if (!history.length) {
       txRows='<tr><td colspan="7" class="empty">No transactions found in last 50 blocks</td></tr>';
@@ -544,7 +641,7 @@ async function renderAddress(addr) {
         var isOut=t.from===addr;
         var dir=isOut?'<span style="color:var(--red);font-weight:600">OUT</span>'
                      :'<span style="color:var(--green);font-weight:600">IN</span>';
-        var cp=isOut?(t.to?addrLink(t.to):t.validatorId?addrLink(t.validatorId):'\u2014'):addrLink(t.from);
+        var cp=isOut?(t.to?addrLink(t.to):t.validatorId?addrLink(t.validatorId):t.contractAddress?addrLink(t.contractAddress):'\u2014'):addrLink(t.from);
         txRows+='<tr data-nav="/tx/'+esc(t.hash)+'">'
           +'<td>'+txLink(t.hash)+'</td>'
           +'<td>'+blockLink(item.bh)+'</td>'
@@ -556,6 +653,41 @@ async function renderAddress(addr) {
           +'</tr>';
       }
     }
+
+    var contractCard = '';
+    if (isContract) {
+      var storageCount = contractStorage && contractStorage.storage ? Object.keys(contractStorage.storage).length : 0;
+      var txCount = Array.isArray(contractTxs) ? contractTxs.length : 0;
+      var eventCount = Array.isArray(contractEvents) ? contractEvents.length : 0;
+      var eventRows = '';
+      if (!eventCount) {
+        eventRows = '<tr><td colspan="4" class="empty">No events in recent range</td></tr>';
+      } else {
+        var ev = contractEvents.slice(0, 20);
+        for (var ei=0; ei<ev.length; ei++) {
+          var eitem = ev[ei];
+          eventRows += '<tr>'
+            +'<td>'+txLink(eitem.txHash)+'</td>'
+            +'<td>'+esc(eitem.name)+'</td>'
+            +'<td>'+eitem.blockHeight+'</td>'
+            +'<td style="color:var(--muted)">'+esc(eitem.data)+'</td>'
+            +'</tr>';
+        }
+      }
+      contractCard =
+        '<div class="card"><div class="card-head">Contract Details</div>'
+        +(contractMeta ? drow('Owner', addrLink(contractMeta.owner, contractMeta.owner)+copyBtn(contractMeta.owner)) : '')
+        +(contractMeta ? drow('Code Hash', '<span class="hl">'+esc(contractMeta.codeHash)+'</span>'+copyBtn(contractMeta.codeHash)) : '')
+        +(contractMeta ? drow('Deployed Height', String(contractMeta.deployedAtHeight)) : '')
+        +drow('Storage Keys', String(storageCount))
+        +drow('Recent Contract TXs', String(txCount))
+        +drow('Recent Events', String(eventCount))
+        +'</div>'
+        +'<div class="card"><div class="card-head">Contract Events'
+        +'<span style="font-weight:400;text-transform:none;font-size:11px;margin-left:6px;color:var(--muted)">last 200 blocks</span></div>'
+        +'<table class="tbl"><thead><tr><th>Tx Hash</th><th>Name</th><th>Block</th><th>Data</th></tr></thead><tbody>'+eventRows+'</tbody></table></div>';
+    }
+
     document.getElementById('app').innerHTML =
       '<div class="breadcrumb">'+navLink('/','Home')+'<span class="sep">\u203a</span><span>Address</span></div>'
       +'<div class="card"><div class="card-head">Address</div>'
@@ -564,7 +696,9 @@ async function renderAddress(addr) {
       +drow('Staked', fmtQtx(acc.staked))
       +drow('Nonce', String(acc.nonce))
       +(validator?drow('Validator',valBadge(validator)+'&nbsp;&nbsp;missed: '+validator.missedBlocks):'')
+      +(isContract ? drow('Contract View', navLink('/contract/'+addr, 'Open Contract Page')) : '')
       +'</div>'
+      +contractCard
       +'<div class="card"><div class="card-head">Transaction History'
       +'<span style="font-weight:400;text-transform:none;font-size:11px;margin-left:6px;color:var(--muted)">last 50 blocks</span></div>'
       +'<table class="tbl"><thead><tr>'
@@ -573,6 +707,163 @@ async function renderAddress(addr) {
   } catch(e) {
     document.getElementById('app').innerHTML =
       '<div class="breadcrumb">'+navLink('/','Home')+'<span class="sep">\u203a</span><span>Address</span></div>'
+      +'<div class="err">'+esc(e.message)+'</div>';
+  }
+}
+
+// ── CONTRACT DETAIL ───────────────────────────────────────────────────────────
+async function renderContract(addr, query) {
+  try {
+    if (!isContractAddress(addr)) {
+      document.getElementById('app').innerHTML =
+        '<div class="breadcrumb">'+navLink('/','Home')+'<span class="sep">\u203a</span><span>Contract</span></div>'
+        +'<div class="err">Invalid contract address</div>';
+      return;
+    }
+
+    var txPageReq = Math.max(0, Number(query.txPage || 0) || 0);
+    var evPageReq = Math.max(0, Number(query.evPage || 0) || 0);
+    var eventFilter = String(query.event || '').trim();
+    var size = Number(query.size || 25) || 25;
+    if ([10, 25, 50, 100].indexOf(size) < 0) size = 25;
+    var lookback = 1000;
+    var res = await Promise.all([
+      rpc('qtx_getLatestBlock'),
+      rpc('qtx_getCode', [addr]),
+      rpc('qtx_getStorage', [addr]).catch(function(){ return { storage: {} }; }),
+      rpc('qtx_getBalance', [addr]).catch(function(){ return { balance:'0', staked:'0', nonce:0 }; })
+    ]);
+    var latest = res[0], meta = res[1], storageRes = res[2], balance = res[3];
+    var h = latest.height;
+    var fromHeight = Math.max(0, h - lookback);
+
+    var txs = await rpc('qtx_getContractTransactions', [addr, fromHeight, h]).catch(function(){ return []; });
+    var events = await rpc('qtx_getEvents', [addr, fromHeight, h, eventFilter]).catch(function(){ return []; });
+
+    var totalTx = txs.length;
+    var totalEv = events.length;
+    var txPages = Math.max(1, Math.ceil(totalTx / size));
+    var evPages = Math.max(1, Math.ceil(totalEv / size));
+    var txPage = Math.min(txPageReq, txPages - 1);
+    var evPage = Math.min(evPageReq, evPages - 1);
+    var txSlice = txs.slice(txPage * size, txPage * size + size);
+    var evSlice = events.slice(evPage * size, evPage * size + size);
+
+    var txRows = '';
+    if (!txSlice.length) {
+      txRows = '<tr><td colspan="6" class="empty">No contract transactions in selected range</td></tr>';
+    } else {
+      for (var i=0; i<txSlice.length; i++) {
+        var t = txSlice[i];
+        txRows += '<tr data-nav="/tx/'+esc(t.hash)+'">'
+          +'<td>'+txLink(t.hash)+'</td>'
+          +'<td>'+typeBadge(t.type)+'</td>'
+          +'<td>'+addrLink(t.from)+'</td>'
+          +'<td>'+(t.method ? '<span class="hl">'+esc(t.method)+'</span>' : '\u2014')+'</td>'
+          +'<td>'+fmtQtx(t.fee)+'</td>'
+          +'<td>'+t.nonce+'</td>'
+          +'</tr>';
+      }
+    }
+
+    var evRows = '';
+    if (!evSlice.length) {
+      evRows = '<tr><td colspan="5" class="empty">No contract events in selected range</td></tr>';
+    } else {
+      for (var j=0; j<evSlice.length; j++) {
+        var ev = evSlice[j];
+          evRows += '<tr>'
+            +'<td>'+navLink('/tx/'+ev.txHash+'?event='+encodeURIComponent(ev.name)+'&contract='+encodeURIComponent(addr), esc(truncHash(ev.txHash)))+'</td>'
+          +'<td>'+ev.blockHeight+'</td>'
+          +'<td>'+esc(ev.name)+'</td>'
+          +'<td>'+esc(ev.data)+'</td>'
+          +'<td>'+esc(fmtTime(ev.timestamp))+'</td>'
+          +'</tr>';
+      }
+    }
+
+    var eventNames = [];
+    for (var n=0; n<events.length; n++) {
+      var en = events[n] && events[n].name ? String(events[n].name) : '';
+      if (!en) continue;
+      if (eventNames.indexOf(en) >= 0) continue;
+      eventNames.push(en);
+      if (eventNames.length >= 8) break;
+    }
+    var filterLinks = navLink(buildContractPath(addr, txPage, 0, '', size), 'All');
+    for (var fi=0; fi<eventNames.length; fi++) {
+      var name = eventNames[fi];
+      if (eventFilter === name) {
+        filterLinks += ' <span class="badge b-blue">'+esc(name)+'</span>';
+      } else {
+        filterLinks += ' ' + navLink(buildContractPath(addr, txPage, 0, name, size), esc(name));
+      }
+    }
+
+    var sizeLinks = '';
+    var sizeOpts = [10, 25, 50, 100];
+    for (var si=0; si<sizeOpts.length; si++) {
+      var s = sizeOpts[si];
+      if (s === size) {
+        sizeLinks += ' <span class="badge b-green">'+s+'</span>';
+      } else {
+        sizeLinks += ' ' + navLink(buildContractPath(addr, 0, 0, eventFilter, s), String(s));
+      }
+    }
+
+    var keyRows = '';
+    var keys = Object.keys((storageRes && storageRes.storage) ? storageRes.storage : {});
+    if (!keys.length) {
+      keyRows = '<tr><td colspan="2" class="empty">No storage keys</td></tr>';
+    } else {
+      var show = keys.slice(0, 50);
+      for (var k=0; k<show.length; k++) {
+        var key = show[k];
+        keyRows += '<tr><td><span class="hl">'+esc(key)+'</span></td><td style="color:var(--muted)">'+esc(storageRes.storage[key])+'</td></tr>';
+      }
+      if (keys.length > 50) {
+        keyRows += '<tr><td colspan="2" class="empty">+ '+(keys.length - 50)+' more keys</td></tr>';
+      }
+    }
+
+    var txPrev = txPage > 0 ? navLink(buildContractPath(addr, txPage - 1, evPage, eventFilter, size), '← Prev TX') : '<span style="color:var(--muted)">← Prev TX</span>';
+    var txNextHas = ((txPage + 1) * size) < totalTx;
+    var txNext = txNextHas ? navLink(buildContractPath(addr, txPage + 1, evPage, eventFilter, size), 'Next TX →') : '<span style="color:var(--muted)">Next TX →</span>';
+    var evPrev = evPage > 0 ? navLink(buildContractPath(addr, txPage, evPage - 1, eventFilter, size), '← Prev Event') : '<span style="color:var(--muted)">← Prev Event</span>';
+    var evNextHas = ((evPage + 1) * size) < totalEv;
+    var evNext = evNextHas ? navLink(buildContractPath(addr, txPage, evPage + 1, eventFilter, size), 'Next Event →') : '<span style="color:var(--muted)">Next Event →</span>';
+
+    document.getElementById('app').innerHTML =
+      '<div class="breadcrumb">'+navLink('/','Home')+'<span class="sep">\u203a</span><span>Contract</span></div>'
+      +'<div class="card"><div class="card-head">Contract Overview</div>'
+      +drow('Address', '<span class="hl" style="word-break:break-all">'+esc(addr)+'</span>'+copyBtn(addr))
+      +drow('Owner', addrLink(meta.owner, meta.owner)+copyBtn(meta.owner))
+      +drow('Code Hash', '<span class="hl">'+esc(meta.codeHash)+'</span>'+copyBtn(meta.codeHash))
+      +drow('Deployed Height', blockLink(meta.deployedAtHeight))
+      +drow('Balance', '<strong>'+fmtQtx(balance.balance)+'</strong>')
+      +drow('Nonce', String(balance.nonce || 0))
+      +drow('Scanned Range', '#'+fromHeight+' → #'+h)
+      +drow('Event Filter', eventFilter ? '<span class="badge b-green">'+esc(eventFilter)+'</span>' : '<span style="color:var(--muted)">none</span>')
+      +drow('Event Filter Input', '<input id="contract-event-filter" data-addr="'+esc(addr)+'" data-tx-page="'+txPage+'" data-page-size="'+size+'" value="'+esc(eventFilter)+'" placeholder="event name" style="background:var(--bg);border:1px solid var(--border2);border-radius:4px;color:var(--text);padding:4px 8px;font-family:var(--mono);font-size:12px;min-width:200px"> <button class="pnbtn" data-contract-filter="1" data-addr="'+esc(addr)+'" data-tx-page="'+txPage+'" data-ev-page="0" data-page-size="'+size+'">Apply</button> <button class="pnbtn" data-contract-clear="1" data-addr="'+esc(addr)+'" data-tx-page="'+txPage+'" data-page-size="'+size+'">Clear</button>')
+      +drow('Quick Filters', filterLinks)
+      +drow('Page Size', sizeLinks)
+      +drow('TX Pagination', txPrev+' <span style="color:var(--muted)">|</span> '+txNext)
+      +drow('Event Pagination', evPrev+' <span style="color:var(--muted)">|</span> '+evNext)
+      +'</div>'
+      +'<div class="two-col">'
+      +'<div class="card"><div class="card-head">Contract Transactions'
+      +'<span style="font-weight:400;text-transform:none;font-size:11px;margin-left:6px;color:var(--muted)">page '+(txPage+1)+' / '+txPages+' • '+totalTx+' total</span></div>'
+      +'<table class="tbl"><thead><tr><th>Tx Hash</th><th>Type</th><th>From</th><th>Method</th><th>Fee</th><th>Nonce</th></tr></thead><tbody>'+txRows+'</tbody></table></div>'
+      +'<div class="card"><div class="card-head">Contract Events'
+      +'<span style="font-weight:400;text-transform:none;font-size:11px;margin-left:6px;color:var(--muted)">page '+(evPage+1)+' / '+evPages+' • '+totalEv+' total</span></div>'
+      +'<table class="tbl"><thead><tr><th>Tx Hash</th><th>Block</th><th>Name</th><th>Data</th><th>Time</th></tr></thead><tbody>'+evRows+'</tbody></table></div>'
+      +'</div>'
+      +'<div class="card"><div class="card-head">Storage Snapshot'
+      +'<span style="font-weight:400;text-transform:none;font-size:11px;margin-left:6px;color:var(--muted)">'+keys.length+' keys</span></div>'
+      +'<table class="tbl"><thead><tr><th>Key</th><th>Value</th></tr></thead><tbody>'+keyRows+'</tbody></table></div>';
+  } catch(e) {
+    document.getElementById('app').innerHTML =
+      '<div class="breadcrumb">'+navLink('/','Home')+'<span class="sep">\u203a</span><span>Contract</span></div>'
       +'<div class="err">'+esc(e.message)+'</div>';
   }
 }
