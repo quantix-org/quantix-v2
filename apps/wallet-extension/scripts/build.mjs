@@ -1,39 +1,26 @@
-import { mkdir, cp, rm } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import esbuild from "esbuild";
+import { build } from "esbuild";
+import { cpSync, rmSync, mkdirSync, existsSync } from "node:fs";
+import { resolve } from "node:path";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const root = resolve(__dirname, "..");
-const src = resolve(root, "src");
+const root = resolve(process.cwd());
 const dist = resolve(root, "dist");
+const out = resolve(root, "out");
 
-const entryPoints = [
-  resolve(src, "background/index.ts"),
-  resolve(src, "content/index.ts"),
-  resolve(src, "inpage/provider.ts"),
-  resolve(src, "popup/index.ts"),
-  resolve(src, "options/index.ts"),
-];
+if (!existsSync(out)) {
+  console.error("Missing out/ folder. Run `npm run build:ui` first.");
+  process.exit(1);
+}
 
-await rm(dist, { recursive: true, force: true });
-await mkdir(resolve(dist, "popup"), { recursive: true });
-await mkdir(resolve(dist, "options"), { recursive: true });
-await mkdir(resolve(dist, "inpage"), { recursive: true });
-await mkdir(resolve(dist, "background"), { recursive: true });
-await mkdir(resolve(dist, "content"), { recursive: true });
+rmSync(dist, { recursive: true, force: true });
+mkdirSync(dist, { recursive: true });
+cpSync(out, dist, { recursive: true });
+cpSync(resolve(root, "src/manifest.json"), resolve(dist, "manifest.json"));
 
-await esbuild.build({
-  entryPoints,
-  outdir: dist,
+await build({
+  entryPoints: [resolve(root, "src/background/index.ts")],
   bundle: true,
-  format: "esm",
   platform: "browser",
-  target: ["chrome120"],
-  sourcemap: true,
-  logLevel: "info",
+  format: "iife",
+  target: "es2020",
+  outfile: resolve(dist, "background/index.js")
 });
-
-await cp(resolve(src, "manifest.json"), resolve(dist, "manifest.json"));
-await cp(resolve(src, "popup/index.html"), resolve(dist, "popup/index.html"));
-await cp(resolve(src, "options/index.html"), resolve(dist, "options/index.html"));
