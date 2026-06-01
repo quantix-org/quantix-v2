@@ -328,30 +328,37 @@ The node auto-submits a `validator_register` transaction and joins the active va
 
 ## Block Explorer
 
-A lightweight Etherscan-inspired SPA served directly from the explorer process.
+Quantix now ships a standalone Next.js explorer app at `apps/explorer`.
 
 ```bash
-# Preset script (remote devnet endpoint)
-npm run explorer:devnet
+# Start standalone explorer app (default port 9860)
+npm run explorer:next
 
-# Local 4-node devnet (validator-alice)
-npm run explorer -- http://localhost:7341/rpc 9090
+# Build standalone explorer app
+npm run explorer:next:build
 
-# Local 3-node devnet
+# Typecheck standalone explorer app
+npm run explorer:next:typecheck
+
+# Legacy standalone HTTP explorer (fallback/reference)
 npm run explorer -- http://localhost:7331/rpc 8080
+
+# Legacy preset script (remote devnet endpoint)
+npm run explorer:devnet
 ```
 
-Default URL: **http://localhost:8080**
+Default URL (Next.js explorer): **http://localhost:9860**
 
 ### Explorer pages
 
 | Route | Description |
 |---|---|
-| `#/` | Home — latest blocks, chain stats, live mempool count |
-| `#/block/<height>` | Block detail — hash, transactions, prev/next navigation |
-| `#/tx/<hash>` | Transaction detail — type, status, sender, amount, fee |
-| `#/address/<addr>` | Address detail — balance, staked amount, nonce, tx history |
-| `#/validators` | Validators — id, owner, stake, status, missed blocks |
+| `/` | Home — latest blocks, chain stats, live mempool count |
+| `/block/<height>` | Block detail — hash, transactions, prev/next navigation |
+| `/tx/<hash>` | Transaction detail — type, status, sender, amount, fee |
+| `/address/<addr>` | Address detail — balance, staked amount, nonce, tx history |
+| `/validators` | Validators — id, owner, stake, status, missed blocks |
+| `/rewards` | Reward history — proposer, fee split, burned fees, block reward |
 
 The page auto-refreshes every **4 seconds** and shows a live status indicator.
 
@@ -849,6 +856,9 @@ Runs integration tests via `tsx --test`. Tests spin up in-process node instances
 | `npm run dev:node` | Start a single node (`validator-alice`, port 7331) |
 | `npm run dev:devnet` | Start 3-node devnet (ports 7331–7333) |
 | `npm run dev:devnet4` | Start 4-node devnet (ports 7341–7344) |
+| `npm run explorer:next` | Run standalone Next.js explorer app (`apps/explorer`) |
+| `npm run explorer:next:build` | Build standalone Next.js explorer app |
+| `npm run explorer:next:typecheck` | Type-check standalone Next.js explorer app |
 | `npm run explorer` | Start explorer — args: `<rpc_url> <port>` |
 | `npm run explorer:devnet` | Explorer → `http://164.68.118.17:7332/rpc` on port 8989 |
 | `npm run qtx` | Wallet CLI — pass commands after `--` |

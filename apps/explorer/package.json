@@ -1,0 +1,22 @@
+{
+  "name": "@quantix/explorer",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --port 8989",
+    "build": "next build",
+    "start": "next start -p 8989",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "next": "^15.3.6",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.12.4",
+    "@types/react": "^19.1.4",
+    "@types/react-dom": "^19.1.2",
+    "typescript": "^5.8.0"
+  }
+}

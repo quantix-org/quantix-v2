@@ -16,3 +16,4 @@ apps/wallet/.env.example
 tools/contract-test
 misc
 apps/wallet-extension/test-dapp
+apps/explorer/.next

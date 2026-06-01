@@ -105,8 +105,8 @@ function parseArgv(argv: string[]) {
   }
   return {
     key:   raw["key"]   ?? "./my-wallet.key.json",
-    rpc:   raw["rpc"]   ?? "http://164.68.118.17:7331/rpc",
-    count: parseInt(raw["count"] ?? "14400", 10),
+    rpc:   raw["rpc"]   ?? "http://localhost:7343/rpc",
+    count: parseInt(raw["count"] ?? "200", 10),
     min:   parseQtx(raw["min"]   ?? "5"),
     max:   parseQtx(raw["max"]   ?? "25"),
     fee:   parseQtx(raw["fee"]   ?? "0.05741"),

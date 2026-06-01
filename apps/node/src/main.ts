@@ -266,6 +266,7 @@ const server = createServer(async (req, res) => {
   res.setHeader("access-control-allow-origin", "*");
   res.setHeader("access-control-allow-methods", "POST, OPTIONS");
   res.setHeader("access-control-allow-headers", "content-type");
+  res.setHeader("access-control-allow-private-network", "true");
 
   if (req.method === "OPTIONS") {
     res.writeHead(204);

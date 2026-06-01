@@ -124,7 +124,10 @@ module.exports = {
       name: "explorer",
       cwd: ROOT,
       script: "bash",
-      args: `-lc "while [ ! -f '${RESET_MARKER}' ]; do sleep 0.2; done; npm run explorer -- http://127.0.0.1:7330/rpc 8989"`,
+      args: `-lc "while [ ! -f '${RESET_MARKER}' ]; do sleep 0.2; done; rm -rf apps/explorer/.next && npm run explorer:next:build && npm run -w @quantix/explorer start"`,
+      env: {
+        NEXT_TELEMETRY_DISABLED: "1",
+      },
     },
     {
       name: "wallet",
