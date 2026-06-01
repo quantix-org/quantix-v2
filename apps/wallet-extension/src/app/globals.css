@@ -1,0 +1,48 @@
+:root {
+  --bg: #080b16;
+  --bg-soft: #0f1323;
+  --card: #131a2f;
+  --brand: #4c8dff;
+  --mint: #3edfc9;
+  --danger: #ff6f8d;
+  --radius: 16px;
+  --text: #e8edf9;
+  --muted: #9aa7c7;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "SF Mono", "IBM Plex Mono", ui-monospace, monospace;
+}
+
+.container { padding: 16px; }
+.card {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--bg-soft);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.badge-ok { color: var(--mint); }
+.badge-bad { color: var(--danger); }
+
+button {
+  background: var(--brand);
+  color: white;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+button.secondary { background: transparent; border: 1px solid var(--brand); }
