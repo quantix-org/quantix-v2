@@ -18,6 +18,18 @@ export interface StoredValidator {
   missedBlocks: number;
   slashed: boolean;
   inactiveBlocks?: number;
+  cumulativeRewards?: string;
+  lastRewardHeight?: number;
+}
+
+export interface StoredRewardDistribution {
+  height: number;
+  proposerId: string;
+  totalFees: string;
+  validatorFeePool: string;
+  burnedFees: string;
+  blockReward: string;
+  rewards: Record<string, string>;
 }
 
 export interface StoredContract {
@@ -99,6 +111,7 @@ export interface NodeSnapshot {
   contractStorage: Record<string, Record<string, string>>;
   contractReceipts: Record<string, StoredContractReceipt>;
   contractEvents: StoredContractEvent[];
+  rewardHistory: StoredRewardDistribution[];
   offlineValidators: string[];
 }
 
@@ -117,6 +130,7 @@ const K = {
   contractStorage:   () => "map:contractStorage",
   contractReceipts:  () => "map:contractReceipts",
   contractEvents:    () => "array:contractEvents",
+  rewardHistory:     () => "array:rewardHistory",
   offlineValidators: () => "array:offlineValidators",
 } as const;
 
@@ -159,7 +173,12 @@ export class NodeStore {
 
       const validators: Record<string, StoredValidator> = {};
       for await (const [key, value] of this.db.iterator({ gte: "validator:", lte: "validator:\xff" })) {
-        validators[key.slice("validator:".length)] = JSON.parse(value) as StoredValidator;
+        const parsed = JSON.parse(value) as StoredValidator;
+        validators[key.slice("validator:".length)] = {
+          ...parsed,
+          cumulativeRewards: parsed.cumulativeRewards ?? "0",
+          lastRewardHeight: parsed.lastRewardHeight ?? 0,
+        };
       }
 
       const blocks: StoredBlock[] = [];
@@ -173,6 +192,7 @@ export class NodeStore {
       const contractStorage   = await this.getJson<Record<string, Record<string, string>>>(K.contractStorage(), {});
       const contractReceipts  = await this.getJson<Record<string, StoredContractReceipt>>(K.contractReceipts(), {});
       const contractEvents    = await this.getJson<StoredContractEvent[]>(K.contractEvents(), []);
+      const rewardHistory     = await this.getJson<StoredRewardDistribution[]>(K.rewardHistory(), []);
       const offlineValidators = await this.getJson<string[]>(K.offlineValidators(), []);
 
       return {
@@ -188,6 +208,7 @@ export class NodeStore {
         contractStorage,
         contractReceipts,
         contractEvents,
+        rewardHistory,
         offlineValidators,
       };
   }
@@ -229,6 +250,7 @@ export class NodeStore {
       { type: "put", key: K.contractStorage(),   value: JSON.stringify(snapshot.contractStorage) },
       { type: "put", key: K.contractReceipts(),  value: JSON.stringify(snapshot.contractReceipts) },
       { type: "put", key: K.contractEvents(),    value: JSON.stringify(snapshot.contractEvents) },
+      { type: "put", key: K.rewardHistory(),     value: JSON.stringify(snapshot.rewardHistory) },
       { type: "put", key: K.offlineValidators(), value: JSON.stringify(snapshot.offlineValidators) },
     ];
 

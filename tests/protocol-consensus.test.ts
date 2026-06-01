@@ -227,6 +227,9 @@ test("slashes validator for equivocation", () => {
     active: true,
     missedBlocks: 0,
     slashed: false,
+    inactiveBlocks: 0,
+    cumulativeRewards: 0n,
+    lastRewardHeight: 0,
   };
 
   const result = slashValidatorForEquivocation(state, "v1", 10);

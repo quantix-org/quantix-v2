@@ -60,6 +60,12 @@ const protocolConfig: ProtocolConfig = {
   baseFee: BigInt(genesis.protocolParams.baseFee),
   epochLength: genesis.protocolParams.epochLength ?? 0,
   maxActiveValidators: genesis.protocolParams.maxActiveValidators ?? 0,
+  rewardEnabled: genesis.protocolParams.rewardEnabled ?? false,
+  blockReward: BigInt(genesis.protocolParams.blockReward ?? "0"),
+  validatorFeeSharePercent: genesis.protocolParams.validatorFeeSharePercent ?? 0,
+  proposerBonusPercent: genesis.protocolParams.proposerBonusPercent ?? 40,
+  rewardMode: genesis.protocolParams.rewardMode ?? "hybrid",
+  rewardHistoryLimit: genesis.protocolParams.rewardHistoryLimit ?? 10000,
 };
 const nodeId = process.env.NODE_ID ?? devnetConfig.seedNode.id;
 const defaultDataDir = resolve(
@@ -699,6 +705,8 @@ interface RpcStateSnapshot {
       missedBlocks: number;
       slashed: boolean;
       inactiveBlocks?: number;
+      cumulativeRewards?: string;
+      lastRewardHeight?: number;
     }
   >;
   pendingUnstakes: Array<{ owner: string; amount: string; unlockAt: number }>;
@@ -733,6 +741,15 @@ interface RpcStateSnapshot {
     name: string;
     data: string;
     blockHeight: number;
+  }>;
+  rewardHistory?: Array<{
+    height: number;
+    proposerId: string;
+    totalFees: string;
+    validatorFeePool: string;
+    burnedFees: string;
+    blockReward: string;
+    rewards: Record<string, string>;
   }>;
   offlineValidators: string[];
 }
@@ -806,6 +823,8 @@ function importStateSnapshot(snapshot: RpcStateSnapshot): void {
         ...validator,
         stake: BigInt(validator.stake),
         inactiveBlocks: validator.inactiveBlocks ?? 0,
+        cumulativeRewards: BigInt(validator.cumulativeRewards ?? "0"),
+        lastRewardHeight: validator.lastRewardHeight ?? 0,
       },
     ]),
   );
@@ -819,6 +838,17 @@ function importStateSnapshot(snapshot: RpcStateSnapshot): void {
   state.contractStorage = { ...(snapshot.contractStorage ?? {}) };
   state.contractReceipts = { ...(snapshot.contractReceipts ?? {}) };
   state.contractEvents = [...(snapshot.contractEvents ?? [])];
+  state.rewardHistory = (snapshot.rewardHistory ?? []).map((entry) => ({
+    height: entry.height,
+    proposerId: entry.proposerId,
+    totalFees: BigInt(entry.totalFees),
+    validatorFeePool: BigInt(entry.validatorFeePool),
+    burnedFees: BigInt(entry.burnedFees),
+    blockReward: BigInt(entry.blockReward),
+    rewards: Object.fromEntries(
+      Object.entries(entry.rewards).map(([validatorId, amount]) => [validatorId, BigInt(amount)]),
+    ),
+  }));
 
   blocks.length = 0;
   for (const block of snapshot.blocks ?? []) {
@@ -941,13 +971,52 @@ async function handleRpcRequest(method: string, params: unknown[]): Promise<unkn
         activeValidators,
         totalValidators: Object.keys(state.validators).length,
         mempoolSize: mempool.length,
+        rewards: {
+          enabled: protocolConfig.rewardEnabled,
+          mode: protocolConfig.rewardMode,
+          blockReward: protocolConfig.blockReward.toString(),
+          validatorFeeSharePercent: protocolConfig.validatorFeeSharePercent,
+          proposerBonusPercent: protocolConfig.proposerBonusPercent,
+        },
       };
     }
     case "qtx_getValidators": {
       return Object.values(state.validators).map((validator) => ({
         ...validator,
         stake: validator.stake.toString(),
+        cumulativeRewards: validator.cumulativeRewards.toString(),
       }));
+    }
+    case "qtx_getValidatorRewards": {
+      const validatorId = String(params[0] ?? "");
+      const validator = state.validators[validatorId];
+      if (!validator) {
+        throw new RpcError(RpcErrorCode.NOT_FOUND, `validator ${validatorId} not found`);
+      }
+      return {
+        validatorId,
+        owner: validator.owner,
+        cumulativeRewards: validator.cumulativeRewards.toString(),
+        lastRewardHeight: validator.lastRewardHeight,
+      };
+    }
+    case "qtx_getRewardsByHeight": {
+      const height = Number(params[0]);
+      if (!Number.isInteger(height) || height < 0) {
+        throw new RpcError(RpcErrorCode.INVALID_PARAMS, "height must be a non-negative integer");
+      }
+      const entry = state.rewardHistory.find((it) => it.height === height);
+      if (!entry) {
+        throw new RpcError(RpcErrorCode.NOT_FOUND, `reward history for height ${height} not found`);
+      }
+      return serializeForJson(entry);
+    }
+    case "qtx_getRewardHistory": {
+      const fromHeight = Number(params[0] ?? 0);
+      const toHeight = Number(params[1] ?? Number.MAX_SAFE_INTEGER);
+      return serializeForJson(
+        state.rewardHistory.filter((entry) => entry.height >= fromHeight && entry.height <= toHeight),
+      );
     }
     case "qtx_getMempool": {
       return mempool.map((tx) => ({ hash: hashTx(tx), from: tx.from, nonce: tx.nonce, type: tx.type }));
@@ -1160,7 +1229,10 @@ async function handleRpcRequest(method: string, params: unknown[]): Promise<unkn
         return { committed: false, reason: "insufficient commit votes" };
       }
 
-      const applyResult = applyBlock(state, proposal.txs, protocolConfig, { verifySignature: verifier });
+      const applyResult = applyBlock(state, proposal.txs, protocolConfig, {
+        verifySignature: verifier,
+        proposerId: proposal.proposerId,
+      });
       // Remove any mempool txs that are now stale (nonce <= committed chain nonce).
       // This handles gossiped txs committed by a peer block that didn't come through
       // our own proposeAndCommit path, which would otherwise corrupt getNextExpectedNonce.
@@ -1410,7 +1482,13 @@ async function loadStateFromDisk(): Promise<void> {
   state.validators = Object.fromEntries(
     Object.entries(snapshot.validators).map(([id, validator]) => [
       id,
-      { ...validator, stake: BigInt(validator.stake), inactiveBlocks: validator.inactiveBlocks ?? 0 },
+      {
+        ...validator,
+        stake: BigInt(validator.stake),
+        inactiveBlocks: validator.inactiveBlocks ?? 0,
+        cumulativeRewards: BigInt(validator.cumulativeRewards ?? "0"),
+        lastRewardHeight: validator.lastRewardHeight ?? 0,
+      },
     ]),
   );
   state.pendingUnstakes = snapshot.pendingUnstakes.map((entry) => ({
@@ -1427,6 +1505,17 @@ async function loadStateFromDisk(): Promise<void> {
   state.contractStorage = { ...snapshot.contractStorage };
   state.contractReceipts = { ...snapshot.contractReceipts };
   state.contractEvents = [...snapshot.contractEvents];
+  state.rewardHistory = snapshot.rewardHistory.map((entry) => ({
+    height: entry.height,
+    proposerId: entry.proposerId,
+    totalFees: BigInt(entry.totalFees),
+    validatorFeePool: BigInt(entry.validatorFeePool),
+    burnedFees: BigInt(entry.burnedFees),
+    blockReward: BigInt(entry.blockReward),
+    rewards: Object.fromEntries(
+      Object.entries(entry.rewards).map(([validatorId, amount]) => [validatorId, BigInt(amount)]),
+    ),
+  }));
   blocks.length = 0;
   for (const block of snapshot.blocks) {
     blocks.push(block);
@@ -1469,6 +1558,8 @@ function buildNodeSnapshot(): NodeSnapshot {
           missedBlocks: validator.missedBlocks,
           slashed: validator.slashed,
           inactiveBlocks: validator.inactiveBlocks,
+          cumulativeRewards: validator.cumulativeRewards.toString(),
+          lastRewardHeight: validator.lastRewardHeight,
         },
       ]),
     ),
@@ -1498,6 +1589,17 @@ function buildNodeSnapshot(): NodeSnapshot {
     contractStorage: structuredClone(state.contractStorage),
     contractReceipts: structuredClone(state.contractReceipts),
     contractEvents: [...state.contractEvents],
+    rewardHistory: state.rewardHistory.map((entry) => ({
+      height: entry.height,
+      proposerId: entry.proposerId,
+      totalFees: entry.totalFees.toString(),
+      validatorFeePool: entry.validatorFeePool.toString(),
+      burnedFees: entry.burnedFees.toString(),
+      blockReward: entry.blockReward.toString(),
+      rewards: Object.fromEntries(
+        Object.entries(entry.rewards).map(([validatorId, amount]) => [validatorId, amount.toString()]),
+      ),
+    })),
     offlineValidators: [...offlineValidators],
   };
 }
@@ -1529,6 +1631,8 @@ function buildStateSnapshot(): RpcStateSnapshot {
           missedBlocks: validator.missedBlocks,
           slashed: validator.slashed,
           inactiveBlocks: validator.inactiveBlocks,
+          cumulativeRewards: validator.cumulativeRewards.toString(),
+          lastRewardHeight: validator.lastRewardHeight,
         },
       ]),
     ),
@@ -1541,6 +1645,17 @@ function buildStateSnapshot(): RpcStateSnapshot {
     contractStorage: structuredClone(state.contractStorage),
     contractReceipts: structuredClone(state.contractReceipts),
     contractEvents: [...state.contractEvents],
+    rewardHistory: state.rewardHistory.map((entry) => ({
+      height: entry.height,
+      proposerId: entry.proposerId,
+      totalFees: entry.totalFees.toString(),
+      validatorFeePool: entry.validatorFeePool.toString(),
+      burnedFees: entry.burnedFees.toString(),
+      blockReward: entry.blockReward.toString(),
+      rewards: Object.fromEntries(
+        Object.entries(entry.rewards).map(([validatorId, amount]) => [validatorId, amount.toString()]),
+      ),
+    })),
     offlineValidators: [...offlineValidators],
   };
 }

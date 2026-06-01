@@ -7,6 +7,7 @@ import type {
   ContractState,
   PendingValidatorEntry,
   ProtocolState,
+  RewardDistribution,
   ValidatorState,
 } from "./types.js";
 
@@ -23,7 +24,7 @@ export function createGenesisState(initialBalances: Record<Address, bigint>): Pr
 
   return {
     height: 0,
-    lastBlockHash: hashState(0, "genesis", accounts, {}, [], {}, {}, {}, []),
+    lastBlockHash: hashState(0, "genesis", accounts, {}, [], {}, {}, {}, [], []),
     accounts,
     validators: {},
     pendingUnstakes: [],
@@ -32,6 +33,7 @@ export function createGenesisState(initialBalances: Record<Address, bigint>): Pr
     contractStorage: {},
     contractReceipts: {},
     contractEvents: [],
+    rewardHistory: [],
   };
 }
 
@@ -47,6 +49,7 @@ export function cloneState(state: ProtocolState): ProtocolState {
     contractStorage: structuredClone(state.contractStorage),
     contractReceipts: structuredClone(state.contractReceipts),
     contractEvents: structuredClone(state.contractEvents),
+    rewardHistory: structuredClone(state.rewardHistory),
   };
 }
 
@@ -93,6 +96,7 @@ export function updateBlockHead(
     state.contractStorage,
     state.contractReceipts,
     state.contractEvents,
+    state.rewardHistory,
   );
 }
 
@@ -106,6 +110,7 @@ function hashState(
   contractStorage: Record<Address, Record<string, string>>,
   contractReceipts: Record<string, ContractReceipt>,
   contractEvents: ContractEvent[],
+  rewardHistory: RewardDistribution[],
 ): string {
   const accountPairs = Object.entries(accounts)
     .sort(([a], [b]) => a.localeCompare(b))
@@ -114,7 +119,7 @@ function hashState(
 
   const validatorPairs = Object.entries(validators)
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([id, data]) => `${id}:${data.owner}:${data.stake}:${data.active}:${data.slashed}`)
+    .map(([id, data]) => `${id}:${data.owner}:${data.stake}:${data.active}:${data.slashed}:${data.cumulativeRewards}:${data.lastRewardHeight}`)
     .join("|");
 
   const pendingPairs = [...pending]
@@ -148,7 +153,18 @@ function hashState(
     .map((e) => `${e.txHash}:${e.contractAddress}:${e.name}:${e.data}:${e.blockHeight}`)
     .join("|");
 
+  const rewardPairs = [...rewardHistory]
+    .sort((a, b) => a.height - b.height)
+    .map((entry) => {
+      const rewards = Object.entries(entry.rewards)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([validatorId, amount]) => `${validatorId}:${amount}`)
+        .join(",");
+      return `${entry.height}:${entry.proposerId}:${entry.totalFees}:${entry.validatorFeePool}:${entry.burnedFees}:${entry.blockReward}:{${rewards}}`;
+    })
+    .join("|");
+
   return createHash("sha256")
-    .update(`${height}:${seed}:${accountPairs}:${validatorPairs}:${pendingPairs}:${contractPairs}:${storagePairs}:${receiptPairs}:${eventPairs}`)
+    .update(`${height}:${seed}:${accountPairs}:${validatorPairs}:${pendingPairs}:${contractPairs}:${storagePairs}:${receiptPairs}:${eventPairs}:${rewardPairs}`)
     .digest("hex");
 }

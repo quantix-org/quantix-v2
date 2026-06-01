@@ -144,7 +144,10 @@ export function runConsensusRound(
     }
   }
 
-  const applyResult = applyBlock(state, txs, config, options);
+  const applyResult = applyBlock(state, txs, config, {
+    ...options,
+    proposerId: proposer.id,
+  });
   return {
     committed: true,
     proposalHash,

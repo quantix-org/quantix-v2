@@ -51,6 +51,18 @@ export interface GenesisProtocolParams {
    * no limit.
    */
   maxActiveValidators?: number;
+  /** Enable block reward + fee distribution for validators. */
+  rewardEnabled?: boolean;
+  /** Fixed reward minted to proposer each committed block (base units). */
+  blockReward?: string;
+  /** Percentage of total fees sent to validator reward pool. Remaining fees are burned. */
+  validatorFeeSharePercent?: number;
+  /** In hybrid mode, percentage of validator fee pool allocated as proposer bonus. */
+  proposerBonusPercent?: number;
+  /** Reward distribution mode. */
+  rewardMode?: "hybrid" | "proposer-only" | "all-equal" | "weighted-by-stake";
+  /** Max reward history records retained in state (0 = unlimited). */
+  rewardHistoryLimit?: number;
 }
 
 export interface GenesisNetwork {

@@ -18,6 +18,8 @@ export interface ApplyOptions {
   verifySignature: SignatureVerifier;
   /** When true, validator_register activates immediately (bypasses epoch queue). Use only for genesis bootstrap. */
   genesisBootstrap?: boolean;
+  /** Proposer validator id (address) for the block being applied. */
+  proposerId?: string;
 }
 
 export function applyBlock(
@@ -65,6 +67,7 @@ export function applyBlock(
     }
   }
 
+  distributeValidatorRewards(state, accepted, config, options.proposerId, state.height + 1);
   activatePendingValidators(state, config);
   updateBlockHead(state, accepted.length, state.validators);
   return { accepted, rejected };
@@ -179,6 +182,8 @@ export function applyTransaction(
           missedBlocks: 0,
           slashed: false,
           inactiveBlocks: 0,
+          cumulativeRewards: 0n,
+          lastRewardHeight: 0,
         };
       }
       return true;
@@ -416,12 +421,132 @@ function activatePendingValidators(state: ProtocolState, config: ProtocolConfig)
       missedBlocks: 0,
       slashed: false,
       inactiveBlocks: 0,
+      cumulativeRewards: 0n,
+      lastRewardHeight: 0,
     };
     activated.add(pending.id);
     remaining -= 1;
   }
 
   state.pendingValidators = state.pendingValidators.filter((p) => !activated.has(p.id));
+}
+
+function distributeValidatorRewards(
+  state: ProtocolState,
+  acceptedTxs: Transaction[],
+  config: ProtocolConfig,
+  proposerId: string | undefined,
+  blockHeight: number,
+): void {
+  if (!config.rewardEnabled || !proposerId) {
+    return;
+  }
+
+  const activeValidators = Object.values(state.validators)
+    .filter((validator) => validator.active && !validator.slashed)
+    .sort((a, b) => a.id.localeCompare(b.id));
+
+  if (activeValidators.length === 0) {
+    return;
+  }
+
+  if (!activeValidators.some((validator) => validator.id === proposerId)) {
+    return;
+  }
+
+  const sharePercent = clampPercent(config.validatorFeeSharePercent);
+  const proposerBonusPercent = clampPercent(config.proposerBonusPercent);
+
+  const totalFees = acceptedTxs.reduce((sum, tx) => sum + config.baseFee + tx.fee, 0n);
+  const validatorFeePool = (totalFees * BigInt(sharePercent)) / 100n;
+  const burnedFees = totalFees - validatorFeePool;
+
+  const rewardsByValidator = new Map<string, bigint>(
+    activeValidators.map((validator) => [validator.id, 0n]),
+  );
+
+  if (config.rewardMode === "proposer-only") {
+    rewardsByValidator.set(proposerId, validatorFeePool + config.blockReward);
+  } else if (config.rewardMode === "all-equal") {
+    const n = BigInt(activeValidators.length);
+    const each = n === 0n ? 0n : validatorFeePool / n;
+    const remainder = validatorFeePool - each * n;
+    for (const validator of activeValidators) {
+      rewardsByValidator.set(validator.id, each);
+    }
+    rewardsByValidator.set(
+      proposerId,
+      (rewardsByValidator.get(proposerId) ?? 0n) + remainder + config.blockReward,
+    );
+  } else if (config.rewardMode === "weighted-by-stake") {
+    const totalStake = activeValidators.reduce((sum, validator) => {
+      const account = ensureAccount(state, validator.owner);
+      return sum + account.staked;
+    }, 0n);
+
+    if (totalStake > 0n) {
+      let distributed = 0n;
+      for (const validator of activeValidators) {
+        const stake = ensureAccount(state, validator.owner).staked;
+        const amount = (validatorFeePool * stake) / totalStake;
+        rewardsByValidator.set(validator.id, amount);
+        distributed += amount;
+      }
+      const remainder = validatorFeePool - distributed;
+      rewardsByValidator.set(
+        proposerId,
+        (rewardsByValidator.get(proposerId) ?? 0n) + remainder + config.blockReward,
+      );
+    } else {
+      rewardsByValidator.set(proposerId, validatorFeePool + config.blockReward);
+    }
+  } else {
+    const proposerBonusPool = (validatorFeePool * BigInt(proposerBonusPercent)) / 100n;
+    const equalPool = validatorFeePool - proposerBonusPool;
+    const n = BigInt(activeValidators.length);
+    const each = n === 0n ? 0n : equalPool / n;
+    const remainder = equalPool - each * n;
+
+    for (const validator of activeValidators) {
+      rewardsByValidator.set(validator.id, each);
+    }
+
+    rewardsByValidator.set(
+      proposerId,
+      (rewardsByValidator.get(proposerId) ?? 0n) + proposerBonusPool + remainder + config.blockReward,
+    );
+  }
+
+  for (const validator of activeValidators) {
+    const amount = rewardsByValidator.get(validator.id) ?? 0n;
+    const account = ensureAccount(state, validator.owner);
+    account.balance += amount;
+    validator.cumulativeRewards += amount;
+    validator.lastRewardHeight = blockHeight;
+    state.validators[validator.id] = validator;
+  }
+
+  state.rewardHistory.push({
+    height: blockHeight,
+    proposerId,
+    totalFees,
+    validatorFeePool,
+    burnedFees,
+    blockReward: config.blockReward,
+    rewards: Object.fromEntries(rewardsByValidator.entries()),
+  });
+
+  if (config.rewardHistoryLimit > 0 && state.rewardHistory.length > config.rewardHistoryLimit) {
+    state.rewardHistory.splice(0, state.rewardHistory.length - config.rewardHistoryLimit);
+  }
+}
+
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  const rounded = Math.trunc(value);
+  if (rounded < 0) return 0;
+  if (rounded > 100) return 100;
+  return rounded;
 }
 
 export function transactionSigningPayload(tx: Transaction): string {

@@ -7,4 +7,10 @@ export const DEFAULT_PROTOCOL_CONFIG: ProtocolConfig = {
   baseFee: 1n,
   maxActiveValidators: 0,
   epochLength: 0,
+  rewardEnabled: false,
+  blockReward: 0n,
+  validatorFeeSharePercent: 0,
+  proposerBonusPercent: 40,
+  rewardMode: "hybrid",
+  rewardHistoryLimit: 10000,
 };

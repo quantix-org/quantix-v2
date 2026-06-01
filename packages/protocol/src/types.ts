@@ -53,6 +53,22 @@ export interface ValidatorState {
   slashed: boolean;
   /** Consecutive blocks this validator has not participated in. Resets to 0 on participation. */
   inactiveBlocks: number;
+  /** Total rewards credited to this validator owner account since genesis. */
+  cumulativeRewards: bigint;
+  /** Last block height where this validator received reward accounting update. */
+  lastRewardHeight: number;
+}
+
+export type RewardMode = "hybrid" | "proposer-only" | "all-equal" | "weighted-by-stake";
+
+export interface RewardDistribution {
+  height: number;
+  proposerId: string;
+  totalFees: bigint;
+  validatorFeePool: bigint;
+  burnedFees: bigint;
+  blockReward: bigint;
+  rewards: Record<string, bigint>;
 }
 
 export interface PendingValidatorEntry {
@@ -101,6 +117,18 @@ export interface ProtocolConfig {
    * are activated. 0 = activate immediately (legacy behaviour).
    */
   epochLength: number;
+  /** Enables reward accounting/distribution for committed blocks. */
+  rewardEnabled: boolean;
+  /** Fixed reward minted to proposer per committed block. */
+  blockReward: bigint;
+  /** Percentage of total per-block fees allocated to validators (remaining is burned). */
+  validatorFeeSharePercent: number;
+  /** In hybrid mode, percentage of validator fee pool allocated to proposer bonus. */
+  proposerBonusPercent: number;
+  /** Reward mode for validator fee pool distribution. */
+  rewardMode: RewardMode;
+  /** Max reward history entries retained in state. 0 means unlimited retention. */
+  rewardHistoryLimit: number;
 }
 
 export interface ProtocolState {
@@ -119,4 +147,5 @@ export interface ProtocolState {
   contractStorage: Record<Address, Record<string, string>>;
   contractReceipts: Record<string, ContractReceipt>;
   contractEvents: ContractEvent[];
+  rewardHistory: RewardDistribution[];
 }

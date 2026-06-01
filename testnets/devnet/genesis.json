@@ -26,7 +26,13 @@
     "unstakeCooldownBlocks": 20,
     "baseFee": "1",
     "epochLength": 0,
-    "maxActiveValidators": 0
+    "maxActiveValidators": 0,
+    "rewardEnabled": true,
+    "blockReward": "100000000000000000",
+    "validatorFeeSharePercent": 80,
+    "proposerBonusPercent": 40,
+    "rewardMode": "hybrid",
+    "rewardHistoryLimit": 10000
   },
   "network": {
     "rpc": {
