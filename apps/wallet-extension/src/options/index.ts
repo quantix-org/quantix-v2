@@ -17,7 +17,12 @@ function isValidQtxAddress(value: string): boolean {
 }
 
 function isValidRpcEndpoint(value: string): boolean {
-  return /^https?:\/\//.test(value) && value.endsWith("/rpc");
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function asWalletAccount(value: unknown): StoredAccount {
@@ -71,7 +76,7 @@ async function run(): Promise<void> {
 
     if (!isValidRpcEndpoint(rpcEndpoint)) {
       status.className = "err";
-      status.textContent = "RPC endpoint must start with http(s):// and end with /rpc.";
+      status.textContent = "RPC endpoint must be a valid http(s) URL.";
       return;
     }
 
