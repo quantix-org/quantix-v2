@@ -1,14 +1,12 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "target": "ES2022",
-    "module": "ES2022",
-    "moduleResolution": "Bundler",
-    "lib": ["ES2022", "DOM", "WebWorker"],
-    "rootDir": "src",
-    "outDir": "dist",
-    "declaration": false,
-    "sourceMap": true
+    "jsx": "preserve",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    }
   },
-  "include": ["src/**/*.ts", "src/**/*.d.ts"]
+  "include": ["src", "tests", "next-env.d.ts"],
+  "exclude": ["node_modules"]
 }

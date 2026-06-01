@@ -2,20 +2,23 @@
   "name": "@quantix/wallet-extension",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
   "scripts": {
-    "clean": "rm -rf dist",
-    "build": "npm run clean && node ./scripts/build.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
-  },
-  "devDependencies": {
-    "@types/chrome": "^0.1.21",
-    "esbuild": "^0.25.10",
-    "typescript": "^5.8.0"
+    "dev": "next dev --port 9860",
+    "build:ui": "next build",
+    "build:bg": "node ./scripts/build.mjs",
+    "build": "npm run build:ui && npm run build:bg"
   },
   "dependencies": {
-    "@noble/hashes": "^1.8.0",
-    "@noble/post-quantum": "^0.6.0",
-    "@quantix/sdk": "*"
+    "@quantix/crypto": "workspace:*",
+    "@quantix/wallet-core": "workspace:*",
+    "next": "^15.3.6",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.12.4",
+    "@types/react": "^19.1.4",
+    "@types/react-dom": "^19.1.2",
+    "typescript": "^5.8.0"
   }
 }
