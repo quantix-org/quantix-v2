@@ -106,11 +106,11 @@ function parseArgv(argv: string[]) {
   return {
     key:   raw["key"]   ?? "./my-wallet.key.json",
     rpc:   raw["rpc"]   ?? "http://localhost:7343/rpc",
-    count: parseInt(raw["count"] ?? "200", 10),
-    min:   parseQtx(raw["min"]   ?? "5"),
-    max:   parseQtx(raw["max"]   ?? "25"),
-    fee:   parseQtx(raw["fee"]   ?? "0.05741"),
-    delay: parseInt(raw["delay"] ?? "500", 10),
+    count: parseInt(raw["count"] ?? "540000", 10),
+    min:   parseQtx(raw["min"]   ?? "0.1"),
+    max:   parseQtx(raw["max"]   ?? "5"),
+    fee:   parseQtx(raw["fee"]   ?? "0.005"),
+    delay: parseInt(raw["delay"] ?? "1530", 10),
     extraAddrs: raw["addr"] ? raw["addr"].split(",").map(a => a.trim()).filter(Boolean) : [],
   };
 }
