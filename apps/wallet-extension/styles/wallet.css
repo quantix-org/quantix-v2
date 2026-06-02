@@ -152,6 +152,16 @@ textarea:focus {
   border: 1px solid rgba(94, 161, 255, 0.5);
 }
 
+.brand-logo {
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  object-fit: cover;
+  display: block;
+  border: 1px solid rgba(94, 161, 255, 0.35);
+  background: rgba(94, 161, 255, 0.1);
+}
+
 .status-badge {
   font-size: 11px;
   padding: 4px 8px;
@@ -186,9 +196,13 @@ textarea:focus {
 
 .tabs-row {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 8px;
   margin-bottom: 12px;
+}
+
+.home-activity {
+  margin-top: 10px;
 }
 
 .tab-btn {
@@ -259,6 +273,10 @@ textarea:focus {
   margin-top: 10px;
 }
 
+.actions-row.actions-row-3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+
 .activity-item {
   padding: 10px 0;
   border-bottom: 1px solid var(--line);
@@ -271,6 +289,17 @@ textarea:focus {
 .activity-amount {
   font-weight: 700;
   margin-bottom: 4px;
+}
+
+.tx-link {
+  color: var(--brand);
+  text-decoration: none;
+  display: inline-block;
+  max-width: 100%;
+}
+
+.tx-link:hover {
+  text-decoration: underline;
 }
 
 .field {
@@ -368,6 +397,40 @@ textarea:focus {
   gap: 10px;
 }
 
+.export-json {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+}
+
 .muted {
   color: var(--muted);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(94, 161, 255, 0.6) rgba(255, 255, 255, 0.06);
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(94, 161, 255, 0.9), rgba(54, 214, 200, 0.9));
+  border-radius: 999px;
+  border: 2px solid rgba(7, 17, 31, 0.85);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(94, 161, 255, 1), rgba(54, 214, 200, 1));
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
 }

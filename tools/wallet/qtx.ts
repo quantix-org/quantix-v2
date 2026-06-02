@@ -179,6 +179,7 @@ interface Args {
 }
 
 function parseArgs(argv: string[]): Args {
+  // const DEFAULT_RPC = "https://rpc1.qpqb.org";
   const DEFAULT_RPC = "http://127.0.0.1:7330/rpc";
   const DEFAULT_KEY = "./wallet.key.json";
 

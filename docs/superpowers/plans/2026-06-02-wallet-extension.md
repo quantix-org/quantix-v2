@@ -495,7 +495,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         return;
       }
       case "settings:get": {
-        const endpoint = await storageGet<string>(RPC_ENDPOINT_KEY, "http://127.0.0.1:7330/rpc");
+        const endpoint = await storageGet<string>(RPC_ENDPOINT_KEY, "https://rpc1.qpqb.org");
         sendResponse({ ok: true, endpoint });
         return;
       }
@@ -734,7 +734,7 @@ import { useEffect, useState } from "react";
 export default function BalanceCard() {
   const [address, setAddress] = useState<string | null>(null);
   const [balance, setBalance] = useState<string>("0");
-  const [endpoint, setEndpoint] = useState<string>("http://127.0.0.1:7330/rpc");
+  const [endpoint, setEndpoint] = useState<string>("https://rpc1.qpqb.org");
 
   useEffect(() => {
     chrome.runtime.sendMessage({ type: "accounts:list" }, (res) => {
@@ -851,7 +851,7 @@ git commit -m "feat: add popup landing and activity list"
 import { useState } from "react";
 
 export default function SettingsForm() {
-  const [endpoint, setEndpoint] = useState("http://127.0.0.1:7330/rpc");
+  const [endpoint, setEndpoint] = useState("https://rpc1.qpqb.org");
 
   const onSave = () => {
     chrome.runtime.sendMessage({ type: "settings:set", endpoint }, () => {});

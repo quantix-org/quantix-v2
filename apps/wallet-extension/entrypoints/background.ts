@@ -268,6 +268,31 @@ async function handleMessage(message: any): Promise<any> {
       await localSet(ACTIVE_ADDRESS_KEY, address);
       return { ok: true };
     }
+    case "accounts:export": {
+      const vault = await ensureUnlocked();
+      const requested = String(message.address ?? "").trim();
+      const address = requested || vault.activeAddress || "";
+      if (!address) {
+        throw new Error("No active account to export");
+      }
+
+      const account = vault.accounts[address];
+      if (!account) {
+        throw new Error("Account not found");
+      }
+
+      return {
+        ok: true,
+        account: {
+          version: "quantix-key/v1",
+          address: account.address,
+          publicKey: account.publicKey,
+          privateKey: account.privateKey,
+          createdAt: account.createdAt,
+          exportedAt: Date.now(),
+        },
+      };
+    }
     case "activity:list": {
       const endpoint = await localGet<string>(RPC_ENDPOINT_KEY, DEFAULT_RPC_ENDPOINT);
       const items = await localGet<ActivityItem[]>(ACTIVITY_LOG_KEY, []);

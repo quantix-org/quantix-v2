@@ -3,7 +3,7 @@ import { DEFAULT_CURRENCY, DEFAULT_LOCK_TIMEOUT_MIN, DEFAULT_NETWORK, DEFAULT_RP
 import { localGet, localSet } from "./storage";
 import type { AccountRecord, ActivityItem } from "./types";
 
-type Tab = "home" | "activity" | "settings";
+type Tab = "home" | "settings";
 
 type WalletUiState = {
   booting: boolean;
@@ -26,11 +26,15 @@ type WalletUiState = {
   accountsMenuOpen: boolean;
   showSend: boolean;
   showReceive: boolean;
+  showExport: boolean;
   sendTo: string;
   sendAmount: string;
   sendPending: boolean;
   sendError: string;
   sendNotice: string;
+  exportJson: string;
+  exportError: string;
+  exportNotice: string;
   settingsError: string;
   settingsNotice: string;
   accountName: string;
@@ -59,11 +63,15 @@ const initialState = (): WalletUiState => ({
   accountsMenuOpen: false,
   showSend: false,
   showReceive: false,
+  showExport: false,
   sendTo: "",
   sendAmount: "",
   sendPending: false,
   sendError: "",
   sendNotice: "",
+  exportJson: "",
+  exportError: "",
+  exportNotice: "",
   settingsError: "",
   settingsNotice: "",
   accountName: "",
@@ -123,7 +131,7 @@ export async function mountWalletApp(root: HTMLElement, initialTab: Tab): Promis
         <div class="unlock-shell">
           <div class="card unlock-card">
             <div class="brand" style="margin-bottom: 14px;">
-              <span class="brand-mark">Q</span>
+              <img class="brand-logo" src="wallet-logo.png" alt="Quantix logo" />
               <span>Quantix Wallet</span>
             </div>
             <div class="stack">
@@ -149,7 +157,7 @@ export async function mountWalletApp(root: HTMLElement, initialTab: Tab): Promis
       <div class="unlock-shell">
         <div class="card unlock-card">
           <div class="brand" style="margin-bottom: 14px;">
-            <span class="brand-mark">Q</span>
+            <img class="brand-logo" src="wallet-logo.png" alt="Quantix logo" />
             <span>Quantix Wallet</span>
           </div>
           <div class="stack">
@@ -193,6 +201,10 @@ export async function mountWalletApp(root: HTMLElement, initialTab: Tab): Promis
           <div class="menu-item-title"><span>Import Wallet</span><span class="active-pill">JSON</span></div>
           <div class="mono truncate">Import a wallet file or pasted JSON</div>
         </button>
+        <button class="menu-item-btn" data-action="open-export-wallet" type="button">
+          <div class="menu-item-title"><span>Export Wallet</span><span class="active-pill">Backup</span></div>
+          <div class="mono truncate">Export active wallet JSON</div>
+        </button>
         <div style="height: 1px; background: var(--line); margin: 6px 0;"></div>
         ${items}
       </div>
@@ -203,7 +215,7 @@ export async function mountWalletApp(root: HTMLElement, initialTab: Tab): Promis
     return `
       <header class="topbar">
         <div class="brand">
-          <span class="brand-mark">Q</span>
+          <img class="brand-logo" src="wallet-logo.png" alt="Quantix logo" />
           <span>Quantix</span>
         </div>
         <div class="status-badge ${state.connected ? "badge-ok" : "badge-bad"}">${state.connected ? "● Connected" : "○ Offline"}</div>
@@ -220,7 +232,6 @@ export async function mountWalletApp(root: HTMLElement, initialTab: Tab): Promis
     return `
       <div class="tabs-row">
         <button class="tab-btn ${state.tab === "home" ? "tab-active" : ""}" data-action="set-tab" data-tab="home">Home</button>
-        <button class="tab-btn ${state.tab === "activity" ? "tab-active" : ""}" data-action="set-tab" data-tab="activity">Activity</button>
         <button class="tab-btn ${state.tab === "settings" ? "tab-active" : ""}" data-action="set-tab" data-tab="settings">Settings</button>
       </div>
     `;
@@ -242,6 +253,10 @@ export async function mountWalletApp(root: HTMLElement, initialTab: Tab): Promis
         <button data-action="open-send">Send</button>
         <button class="secondary" data-action="open-receive">Receive</button>
       </div>
+      <div class="home-activity">
+        <div class="label">Recent Activity</div>
+        ${renderActivity()}
+      </div>
     `;
   }
 
@@ -260,7 +275,7 @@ export async function mountWalletApp(root: HTMLElement, initialTab: Tab): Promis
                 <div class="empty-note truncate">${escapeHtml(item.to ? `to ${item.to}` : "pending transfer")}</div>
                 <div class="empty-note">${escapeHtml(formatTime(item.timestamp))}</div>
                 <div class="empty-note">Status: ${escapeHtml(item.status ?? "pending")}</div>
-                <div class="mono truncate">${escapeHtml(item.hash)}</div>
+                <a class="tx-link mono truncate" href="https://devnet.qpqb.org/#/tx/${encodeURIComponent(item.hash)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.hash)}</a>
               </div>
             `
           )
@@ -276,7 +291,7 @@ export async function mountWalletApp(root: HTMLElement, initialTab: Tab): Promis
           <h3 class="settings-title">Settings</h3>
           <div class="field">
             <div class="label">RPC Endpoint</div>
-            <input data-field="endpoint" value="${escapeHtml(state.endpoint)}" placeholder="http://127.0.0.1:7330/rpc" />
+            <input data-field="endpoint" value="${escapeHtml(state.endpoint)}" placeholder="https://rpc1.qpqb.org" />
           </div>
           <div class="field">
             <div class="label">Network</div>
@@ -400,16 +415,44 @@ export async function mountWalletApp(root: HTMLElement, initialTab: Tab): Promis
     `;
   }
 
+  function renderExportModal(): string {
+    if (!state.showExport) return "";
+
+    return `
+      <div class="modal-backdrop" data-action="close-export">
+        <div class="modal-card">
+          <h3 class="settings-title">Export Wallet</h3>
+          <div class="field">
+            <div class="label">Active Address</div>
+            <input value="${escapeHtml(state.activeAddress || "No active account")}" readonly />
+          </div>
+          <div class="field">
+            <div class="label">Wallet JSON</div>
+            <textarea class="export-json" rows="7" readonly>${escapeHtml(state.exportJson || "Click Export JSON to generate backup")}</textarea>
+          </div>
+          ${state.exportError ? `<div class="error-text">${escapeHtml(state.exportError)}</div>` : ""}
+          ${state.exportNotice ? `<div class="save-note">${escapeHtml(state.exportNotice)}</div>` : ""}
+          <div class="actions-row actions-row-3" style="margin-bottom: 0;">
+            <button class="secondary" data-action="close-export">Close</button>
+            <button class="secondary" data-action="copy-export-json">Copy JSON</button>
+            <button data-action="download-export-json">Download JSON</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   function renderApp(): string {
     return `
       <div class="app-shell">
         ${renderTopBar()}
         <main class="container scroll-area">
           ${renderTabs()}
-          ${state.tab === "home" ? renderHome() : state.tab === "activity" ? renderActivity() : renderSettings()}
+          ${state.tab === "home" ? renderHome() : renderSettings()}
         </main>
         ${renderSendModal()}
         ${renderReceiveModal()}
+        ${renderExportModal()}
         ${renderAccountWizard()}
       </div>
     `;
@@ -537,6 +580,7 @@ export async function mountWalletApp(root: HTMLElement, initialTab: Tab): Promis
           }
           await refreshConnection();
           await refreshAccounts();
+          await refreshActivity();
           await refreshBalance();
           const focused = document.activeElement;
           const userIsTyping =
@@ -702,6 +746,79 @@ export async function mountWalletApp(root: HTMLElement, initialTab: Tab): Promis
     render();
   }
 
+  async function openExportWallet(): Promise<void> {
+    if (!(await ensureVaultSessionAlive())) return;
+
+    state.exportError = "";
+    state.exportNotice = "";
+    state.exportJson = "";
+
+    if (!state.activeAddress) {
+      state.exportError = "No active account to export";
+      state.showExport = true;
+      render(true);
+      return;
+    }
+
+    try {
+      const response = await sendMessage<any>({ type: "accounts:export", address: state.activeAddress });
+      if (!response?.ok) {
+        state.exportError = response?.error ?? "Failed to export wallet";
+      } else {
+        state.exportJson = JSON.stringify(response.account, null, 2);
+        state.exportNotice = "Wallet JSON ready. Keep this file private.";
+      }
+    } catch (error) {
+      state.exportError = error instanceof Error ? error.message : "Failed to export wallet";
+    }
+
+    state.showExport = true;
+    state.accountsMenuOpen = false;
+    render(true);
+  }
+
+  async function copyExportJson(): Promise<void> {
+    if (!state.exportJson) {
+      state.exportError = "No JSON to copy";
+      render(true);
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(state.exportJson);
+      state.exportError = "";
+      state.exportNotice = "Wallet JSON copied";
+    } catch {
+      state.exportError = "Failed to copy JSON";
+    }
+    render(true);
+  }
+
+  function downloadExportJson(): void {
+    if (!state.exportJson) {
+      state.exportError = "No JSON to download";
+      render(true);
+      return;
+    }
+
+    try {
+      const addressPart = state.activeAddress || "wallet";
+      const blob = new Blob([state.exportJson], { type: "application/json" });
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = `quantix-wallet-${addressPart}.json`;
+      anchor.click();
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+      state.exportError = "";
+      state.exportNotice = "Wallet JSON downloaded";
+    } catch {
+      state.exportError = "Failed to download JSON";
+    }
+
+    render(true);
+  }
+
   root.addEventListener("click", (event) => {
     const target = (event.target as HTMLElement | null)?.closest<HTMLElement>("[data-action]");
     if (!target) return;
@@ -721,6 +838,14 @@ export async function mountWalletApp(root: HTMLElement, initialTab: Tab): Promis
       return;
     }
 
+    if (action === "close-export" && event.target === target) {
+      state.showExport = false;
+      state.exportError = "";
+      state.exportNotice = "";
+      render(true);
+      return;
+    }
+
     if (action === "close-account-wizard" && event.target === target) {
       state.accountWizard = null;
       state.accountName = "";
@@ -734,7 +859,7 @@ export async function mountWalletApp(root: HTMLElement, initialTab: Tab): Promis
     // For backdrop-close actions: if the click landed inside the modal content
     // (event.target !== backdrop element) we must swallow the event entirely so
     // the switch below does not close the modal.
-    if (action === "close-send" || action === "close-receive" || action === "close-account-wizard") {
+    if (action === "close-send" || action === "close-receive" || action === "close-account-wizard" || action === "close-export") {
       return;
     }
 
@@ -789,9 +914,6 @@ export async function mountWalletApp(root: HTMLElement, initialTab: Tab): Promis
         case "set-tab":
           state.tab = target.dataset.tab as Tab;
           state.accountsMenuOpen = false;
-          if (state.tab === "activity") {
-            await refreshActivity();
-          }
           render(true);
           return;
         case "open-settings":
@@ -823,6 +945,9 @@ export async function mountWalletApp(root: HTMLElement, initialTab: Tab): Promis
           state.settingsNotice = "";
           render(true);
           return;
+        case "open-export-wallet":
+          await openExportWallet();
+          return;
         case "close-account-wizard":
           // handled by the backdrop-only guard above; this branch only fires
           // when a button with data-action="close-account-wizard" is clicked directly
@@ -851,6 +976,18 @@ export async function mountWalletApp(root: HTMLElement, initialTab: Tab): Promis
         case "close-receive":
           state.showReceive = false;
           render(true);
+          return;
+        case "close-export":
+          state.showExport = false;
+          state.exportError = "";
+          state.exportNotice = "";
+          render(true);
+          return;
+        case "copy-export-json":
+          await copyExportJson();
+          return;
+        case "download-export-json":
+          downloadExportJson();
           return;
         case "send-submit":
           await sendTransaction();
@@ -937,6 +1074,7 @@ export async function mountWalletApp(root: HTMLElement, initialTab: Tab): Promis
           }
           await refreshConnection();
           await refreshAccounts();
+          await refreshActivity();
           await refreshBalance();
           const focused = document.activeElement;
           const userIsTyping =

@@ -7,7 +7,7 @@ export const LOCK_TIMEOUT_KEY = "quantix_lock_timeout_v1";
 export const CURRENCY_KEY = "quantix_currency_v1";
 export const ACTIVITY_LOG_KEY = "quantix_activity_log_v1";
 
-export const DEFAULT_RPC_ENDPOINT = "http://127.0.0.1:7330/rpc";
+export const DEFAULT_RPC_ENDPOINT = "https://rpc1.qpqb.org";
 export const DEFAULT_CHAIN_ID = "quantix-devnet";
 export const DEFAULT_NETWORK = "devnet";
 export const DEFAULT_LOCK_TIMEOUT_MIN = 15;

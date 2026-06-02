@@ -6,7 +6,7 @@ export const PERMISSIONS_KEY = "quantix_origin_permissions_v1";
 export const RPC_ENDPOINT_KEY = "quantix_rpc_endpoint_v1";
 export const APPROVAL_REQUESTS_KEY = "quantix_approval_requests_v1";
 
-export const DEFAULT_RPC_ENDPOINT = "http://127.0.0.1:7330/rpc";
+export const DEFAULT_RPC_ENDPOINT = "https://rpc1.qpqb.org";
 export const DEFAULT_CHAIN_ID = "quantix-devnet";
 export const ONE_QTX = 10n ** 18n;
 
